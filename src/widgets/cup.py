@@ -167,17 +167,17 @@ class Cup(QWidget):
         p.setPen(QPen(QColor(tokens.SKY_300), 2))
         p.drawEllipse(ellipse_rect)
 
-        # 카운트 라벨 "N/M"
+        # 카운트 라벨 "N/M" — 항상 컵의 세로 중앙에 고정
         label = f"{self._count}/{self._goal}"
-        # 물 면 바로 아래에 띄움 (물에 떠있는 느낌)
-        text_y = max(water_top_y + 30, 120.0)
-        # 라벨을 글자 그림자 없이, 흰색
         font = QFont()
-        # Qt는 comma-separated family를 지원하지 않는 QFont — 개별 family 지정 필요
         font.setFamily("Gaegu")
         font.setPointSize(22)
         font.setWeight(QFont.Bold)
         p.setFont(font)
+        # 텍스트 가독성을 위해 살짝 그림자
+        shadow_rect = QRectF(0, sy(125 - 20) + 1, w, sy(40))
+        p.setPen(QColor(0, 0, 0, 80))
+        p.drawText(shadow_rect, Qt.AlignCenter, label)
+        text_rect = QRectF(0, sy(125 - 20), w, sy(40))
         p.setPen(QColor("#ffffff"))
-        text_rect = QRectF(0, sy(text_y - 20), w, sy(40))
         p.drawText(text_rect, Qt.AlignCenter, label)

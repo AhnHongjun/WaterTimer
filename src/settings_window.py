@@ -14,7 +14,7 @@ from PySide6.QtGui import QColor, QCursor, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (
     QDialog, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QScrollArea, QGraphicsDropShadowEffect, QSizePolicy,
-    QSlider, QTimeEdit, QComboBox, QGridLayout, QAbstractSpinBox,
+    QSlider, QTimeEdit, QComboBox, QGridLayout, QAbstractSpinBox, QSpinBox,
     QStyle, QStyleOptionSpinBox,
 )
 
@@ -544,50 +544,47 @@ QSlider::handle:horizontal:hover {{ background: {tokens.SKY_400}; }}
 """
 
 
-# ---------- Themed QTimeEdit (커스텀 화살표) ----------
+# ---------- Themed SpinBox / TimeEdit (커스텀 화살표) ----------
+
+def _paint_themed_spinbox_arrows(widget: QAbstractSpinBox) -> None:
+    """위젯의 up/down 서브컨트롤 rect에 sky 톤 삼각형 아이콘을 덮어 그린다."""
+    opt = QStyleOptionSpinBox()
+    widget.initStyleOption(opt)
+    style = widget.style()
+    up_rect = style.subControlRect(QStyle.CC_SpinBox, opt, QStyle.SC_SpinBoxUp, widget)
+    down_rect = style.subControlRect(QStyle.CC_SpinBox, opt, QStyle.SC_SpinBoxDown, widget)
+
+    painter = QPainter(widget)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QBrush(QColor(tokens.SKY_500)))
+
+    cx = up_rect.center().x()
+    cy = up_rect.center().y()
+    painter.drawPolygon([
+        QPoint(cx - 4, cy + 2),
+        QPoint(cx + 4, cy + 2),
+        QPoint(cx, cy - 3),
+    ])
+    cx = down_rect.center().x()
+    cy = down_rect.center().y()
+    painter.drawPolygon([
+        QPoint(cx - 4, cy - 2),
+        QPoint(cx + 4, cy - 2),
+        QPoint(cx, cy + 3),
+    ])
+
 
 class _ThemedTimeEdit(QTimeEdit):
-    """QTimeEdit 위에 sky 톤 up/down 삼각형 화살표를 그려 기본 화살표를 가린다.
-
-    QSS로 기본 ::up-arrow/::down-arrow를 숨기고, paintEvent에서 QStyle 서브컨트롤
-    rect를 얻어 그 안에 삼각형을 그린다. 버튼 클릭 동작(stepUp/stepDown)은 Qt가
-    자동 처리하므로 여기선 그림만 그리면 됨.
-    """
-
     def paintEvent(self, event):
         super().paintEvent(event)
-        opt = QStyleOptionSpinBox()
-        self.initStyleOption(opt)
-        style = self.style()
-        up_rect = style.subControlRect(QStyle.CC_SpinBox, opt,
-                                       QStyle.SC_SpinBoxUp, self)
-        down_rect = style.subControlRect(QStyle.CC_SpinBox, opt,
-                                         QStyle.SC_SpinBoxDown, self)
+        _paint_themed_spinbox_arrows(self)
 
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(QColor(tokens.SKY_500)))
 
-        # 위 삼각형: 중앙점 위쪽을 꼭짓점으로
-        cx = up_rect.center().x()
-        cy = up_rect.center().y()
-        up_pts = [
-            QPoint(cx - 4, cy + 2),
-            QPoint(cx + 4, cy + 2),
-            QPoint(cx, cy - 3),
-        ]
-        painter.drawPolygon(up_pts)
-
-        # 아래 삼각형: 중앙점 아래쪽을 꼭짓점으로
-        cx = down_rect.center().x()
-        cy = down_rect.center().y()
-        down_pts = [
-            QPoint(cx - 4, cy - 2),
-            QPoint(cx + 4, cy - 2),
-            QPoint(cx, cy + 3),
-        ]
-        painter.drawPolygon(down_pts)
+class _ThemedSpinBox(QSpinBox):
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        _paint_themed_spinbox_arrows(self)
 
 
 # ---------- Labeled Slider ----------
@@ -1136,132 +1133,222 @@ class _StatCard(QFrame):
         root.addLayout(row)
 
 
+class _HistoryPanel(QWidget):
+    """기록 탭. +한잔/초기화/목표 변경 시 전체가 재계산·갱신된다."""
+
+    def __init__(self, sw: "SettingsWindow", parent=None):
+        super().__init__(parent)
+        from src.widgets.cup import Cup
+
+        self._sw = sw
+        self.setStyleSheet(f"background-color: {tokens.SURFACE};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # 제목 + hint — hint는 라이브로 갱신되어야 하므로 Section의 hint 기능 대신 수동 라벨
+        title = QLabel("오늘의 수분 기록")
+        title.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 18px; font-weight: 600; color: {tokens.INK}; background: transparent;"
+        )
+        root.addWidget(title)
+        self._hint_label = QLabel("")
+        self._hint_label.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 12px; color: {tokens.INK_3}; background: transparent; margin-top: 2px;"
+        )
+        root.addWidget(self._hint_label)
+        root.addSpacing(14)
+
+        # 2열 그리드
+        grid = QHBoxLayout()
+        grid.setContentsMargins(0, 8, 0, 0)
+        grid.setSpacing(tokens.SP_3XL)
+        root.addLayout(grid)
+
+        # --- 좌측: Cup 카드 ---
+        cup_card = QFrame()
+        cup_card.setObjectName("cupCard")
+        cup_card.setFixedWidth(300)
+        cup_card.setStyleSheet(f"""
+            QFrame#cupCard {{
+                background-color: {tokens.SKY_50};
+                border: 1px solid {tokens.LINE};
+                border-radius: 20px;
+            }}
+        """)
+        cup_lay = QVBoxLayout(cup_card)
+        cup_lay.setContentsMargins(16, 20, 16, 16)
+        cup_lay.setSpacing(14)
+        cup_lay.setAlignment(Qt.AlignHCenter)
+
+        self._cup = Cup(size=220, count=sw._current_count, goal=sw._cfg.goal)
+        cup_lay.addWidget(self._cup, alignment=Qt.AlignHCenter)
+
+        # 하루 목표 설정 — 디자인상 커스터마이즈 탭에 있지만 여기서도 빠르게 접근
+        goal_row = QHBoxLayout()
+        goal_row.setAlignment(Qt.AlignCenter)
+        goal_row.setSpacing(8)
+        goal_label = QLabel("하루 목표")
+        goal_label.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 13px; color: {tokens.INK_2}; background: transparent;"
+        )
+        goal_row.addWidget(goal_label)
+        self._goal_spin = _ThemedSpinBox()
+        self._goal_spin.setRange(config_mod.MIN_GOAL, config_mod.MAX_GOAL)
+        self._goal_spin.setValue(sw._cfg.goal)
+        self._goal_spin.setSuffix(" 잔")
+        self._goal_spin.setFixedWidth(100)
+        self._goal_spin.setAlignment(Qt.AlignCenter)
+        self._goal_spin.setStyleSheet(_INPUT_STYLE)
+        self._goal_spin.valueChanged.connect(self._on_goal_changed)
+        goal_row.addWidget(self._goal_spin)
+        cup_lay.addLayout(goal_row)
+
+        # 버튼 행
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(14)
+        btn_row.setAlignment(Qt.AlignCenter)
+
+        self._add_btn = QPushButton("+ 한잔")
+        self._add_btn.setCursor(Qt.PointingHandCursor)
+        self._add_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {tokens.SKY_500};
+                color: #ffffff;
+                border: none;
+                border-radius: 999px;
+                padding: 8px 20px;
+                font-family: {tokens.FONT_FUN};
+                font-size: 14px;
+                font-weight: 700;
+            }}
+            QPushButton:hover {{ background-color: {tokens.SKY_400}; }}
+            QPushButton:pressed {{ background-color: {tokens.SKY_600}; }}
+            QPushButton:disabled {{ background-color: {tokens.SKY_200}; color: {tokens.SURFACE}; }}
+        """)
+        self._add_btn.clicked.connect(self._on_add)
+        btn_row.addWidget(self._add_btn)
+
+        self._reset_btn = QPushButton("초기화")
+        self._reset_btn.setCursor(Qt.PointingHandCursor)
+        self._reset_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                color: {tokens.INK_3};
+                border: none;
+                padding: 6px 10px;
+                font-family: {tokens.FONT_UI};
+                font-size: 13px;
+            }}
+            QPushButton:hover {{ color: {tokens.SKY_700}; }}
+        """)
+        self._reset_btn.clicked.connect(self._on_reset)
+        btn_row.addWidget(self._reset_btn)
+        cup_lay.addLayout(btn_row)
+
+        grid.addWidget(cup_card, 0)
+
+        # --- 우측: 차트 + 통계 ---
+        right = QVBoxLayout()
+        right.setSpacing(20)
+        right.setContentsMargins(0, 8, 0, 0)
+
+        # 차트 컨테이너 — 내용만 교체하기 위해 별도 홀더 유지
+        self._chart_wrap = QFrame()
+        self._chart_wrap.setStyleSheet(
+            f"background: transparent; border-bottom: 1px solid {tokens.LINE};"
+        )
+        self._chart_layout = QHBoxLayout(self._chart_wrap)
+        self._chart_layout.setContentsMargins(0, 0, 0, tokens.SP_XL)
+        self._chart_layout.setSpacing(12)
+        self._chart_layout.setAlignment(Qt.AlignBottom)
+        right.addWidget(self._chart_wrap)
+
+        # 통계 홀더
+        self._stats_wrap = QWidget()
+        self._stats_layout = QHBoxLayout(self._stats_wrap)
+        self._stats_layout.setContentsMargins(0, 0, 0, 0)
+        self._stats_layout.setSpacing(12)
+        right.addWidget(self._stats_wrap)
+
+        right.addStretch(1)
+        grid.addLayout(right, 1)
+
+        root.addStretch(1)
+
+        # 초기 렌더
+        self._refresh()
+
+    # ---------- 이벤트 ----------
+
+    def _on_add(self):
+        if self._sw._current_count >= self._sw._cfg.goal:
+            return
+        self._sw._on_add_cup()
+        self._sw._current_count = min(self._sw._current_count + 1, self._sw._cfg.goal)
+        self._refresh()
+
+    def _on_reset(self):
+        self._sw._on_reset_count()
+        self._sw._current_count = 0
+        self._refresh()
+
+    def _on_goal_changed(self, value: int):
+        self._sw._apply(goal=int(value))
+        # 목표가 오늘 카운트보다 작아지면 카운트를 목표 이하로 당김
+        if self._sw._current_count > value:
+            # 기존 카운트를 새 목표까지만 인정하되, 내부 state는 보존 (호출측 책임)
+            pass
+        self._refresh()
+
+    # ---------- 렌더 ----------
+
+    def _refresh(self):
+        cnt = self._sw._current_count
+        goal = self._sw._cfg.goal
+
+        # hint
+        self._hint_label.setText(f"목표 {goal}잔 중 {cnt}잔 마셨어요")
+
+        # Cup
+        self._cup.set_counts(cnt, goal)
+
+        # 목표 달성 여부에 따라 add 버튼 활성
+        self._add_btn.setEnabled(cnt < goal)
+
+        # 차트 리빌드
+        while self._chart_layout.count():
+            item = self._chart_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        import datetime as _dt
+        today_iso = _dt.date.today().isoformat()
+        week_counts, week_labels = _compute_week(self._sw._history, cnt, today_iso)
+        max_count = max(week_counts + [goal])
+        for i, (c, lbl) in enumerate(zip(week_counts, week_labels)):
+            ratio = c / max_count if max_count else 0
+            bar = _WeeklyBar(count=c, day_label=lbl, ratio=ratio, is_today=(i == 6))
+            self._chart_layout.addWidget(bar, 1)
+
+        # 통계 리빌드
+        while self._stats_layout.count():
+            item = self._stats_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        stats = _compute_stats(self._sw._history, cnt, today_iso, goal)
+        self._stats_layout.addWidget(
+            _StatCard("주 평균", f"{stats['weekly_avg']:.1f}", "잔"), 1
+        )
+        self._stats_layout.addWidget(
+            _StatCard("연속 달성", f"{stats['streak']}", "일"), 1
+        )
+        self._stats_layout.addWidget(
+            _StatCard("이번 달", f"{stats['this_month']}", "잔"), 1
+        )
+
+
 def _build_history_tab_for(sw: "SettingsWindow") -> QWidget:
-    from src.widgets.cup import Cup
-
-    root = QWidget()
-    root.setStyleSheet(f"background-color: {tokens.SURFACE};")
-    lay = QVBoxLayout(root)
-    lay.setContentsMargins(0, 0, 0, 0)
-    lay.setSpacing(0)
-
-    hint = f"목표 {sw._cfg.goal}잔 중 {sw._current_count}잔 마셨어요"
-    section = Section("오늘의 수분 기록", hint=hint)
-    lay.addWidget(section)
-
-    # 2열 그리드
-    grid = QHBoxLayout()
-    grid.setContentsMargins(0, 8, 0, 0)
-    grid.setSpacing(tokens.SP_3XL)
-    section.add_layout(grid)
-
-    # --- 좌측: Cup 카드 ---
-    cup_card = QFrame()
-    cup_card.setObjectName("cupCard")
-    cup_card.setFixedWidth(300)
-    cup_card.setStyleSheet(f"""
-        QFrame#cupCard {{
-            background-color: {tokens.SKY_50};
-            border: 1px solid {tokens.LINE};
-            border-radius: 20px;
-        }}
-    """)
-    cup_lay = QVBoxLayout(cup_card)
-    cup_lay.setContentsMargins(16, 20, 16, 16)
-    cup_lay.setSpacing(18)
-    cup_lay.setAlignment(Qt.AlignHCenter)
-
-    cup = Cup(size=220, count=sw._current_count, goal=sw._cfg.goal)
-    cup_lay.addWidget(cup, alignment=Qt.AlignHCenter)
-
-    btn_row = QHBoxLayout()
-    btn_row.setSpacing(14)
-    btn_row.setAlignment(Qt.AlignCenter)
-
-    add_btn = QPushButton("+ 한잔")
-    add_btn.setCursor(Qt.PointingHandCursor)
-    add_btn.setStyleSheet(f"""
-        QPushButton {{
-            background-color: {tokens.SKY_500};
-            color: #ffffff;
-            border: none;
-            border-radius: 999px;
-            padding: 8px 20px;
-            font-family: {tokens.FONT_FUN};
-            font-size: 14px;
-            font-weight: 700;
-        }}
-        QPushButton:hover {{ background-color: {tokens.SKY_400}; }}
-        QPushButton:pressed {{ background-color: {tokens.SKY_600}; }}
-    """)
-
-    def on_add():
-        sw._on_add_cup()
-        sw._current_count = min(sw._current_count + 1, sw._cfg.goal)
-        cup.set_counts(sw._current_count, sw._cfg.goal)
-        # 섹션 hint 갱신을 위해 탭 재빌드 대신 hint 라벨 직접 갱신은 복잡 → 다음에 설정창 열 때 반영됨
-    add_btn.clicked.connect(on_add)
-    btn_row.addWidget(add_btn)
-
-    reset_btn = QPushButton("초기화")
-    reset_btn.setCursor(Qt.PointingHandCursor)
-    reset_btn.setStyleSheet(f"""
-        QPushButton {{
-            background: transparent;
-            color: {tokens.INK_3};
-            border: none;
-            padding: 6px 10px;
-            font-family: {tokens.FONT_UI};
-            font-size: 13px;
-        }}
-        QPushButton:hover {{ color: {tokens.SKY_700}; }}
-    """)
-
-    def on_reset():
-        sw._on_reset_count()
-        sw._current_count = 0
-        cup.set_counts(0, sw._cfg.goal)
-    reset_btn.clicked.connect(on_reset)
-    btn_row.addWidget(reset_btn)
-
-    cup_lay.addLayout(btn_row)
-    grid.addWidget(cup_card, 0)
-
-    # --- 우측: 차트 + 통계 ---
-    right = QVBoxLayout()
-    right.setSpacing(20)
-    right.setContentsMargins(0, 8, 0, 0)
-
-    # 주간 차트
-    chart_wrap = QFrame()
-    chart_wrap.setStyleSheet(f"background: transparent; border-bottom: 1px solid {tokens.LINE};")
-    chart_lay = QHBoxLayout(chart_wrap)
-    chart_lay.setContentsMargins(0, 0, 0, tokens.SP_XL)
-    chart_lay.setSpacing(12)
-    chart_lay.setAlignment(Qt.AlignBottom)
-
-    week_counts, week_labels = _compute_week(
-        sw._history, sw._current_count, sw._cfg._date_today() if hasattr(sw._cfg, "_date_today") else __import__("datetime").date.today().isoformat()
-    )
-    max_count = max(week_counts + [sw._cfg.goal])
-    for i, (c, lbl) in enumerate(zip(week_counts, week_labels)):
-        ratio = c / max_count if max_count else 0
-        bar = _WeeklyBar(count=c, day_label=lbl, ratio=ratio, is_today=(i == 6))
-        chart_lay.addWidget(bar, 1)
-    right.addWidget(chart_wrap)
-
-    # 통계 3장
-    stats = _compute_stats(sw._history, sw._current_count, __import__("datetime").date.today().isoformat(), sw._cfg.goal)
-    stat_row = QHBoxLayout()
-    stat_row.setContentsMargins(0, 0, 0, 0)
-    stat_row.setSpacing(12)
-    stat_row.addWidget(_StatCard("주 평균", f"{stats['weekly_avg']:.1f}", "잔"), 1)
-    stat_row.addWidget(_StatCard("연속 달성", f"{stats['streak']}", "일"), 1)
-    stat_row.addWidget(_StatCard("이번 달", f"{stats['this_month']}", "잔"), 1)
-    right.addLayout(stat_row)
-
-    right.addStretch(1)
-    grid.addLayout(right, 1)
-
-    lay.addStretch(1)
-    return root
+    return _HistoryPanel(sw)
