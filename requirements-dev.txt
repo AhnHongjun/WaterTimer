@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest==8.2.0
+freezegun==1.5.1
+pyinstaller==6.6.0
