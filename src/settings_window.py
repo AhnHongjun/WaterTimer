@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QDialog, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QScrollArea, QGraphicsDropShadowEffect, QSizePolicy,
     QSlider, QTimeEdit, QComboBox, QGridLayout, QAbstractSpinBox, QSpinBox,
-    QStyle, QStyleOptionSpinBox,
+    QStyle, QStyleOptionSpinBox, QLineEdit, QMessageBox,
 )
 
 from src import config as config_mod
@@ -356,6 +356,9 @@ class SettingsWindow(QDialog):
 
     def _build_history_tab(self) -> QWidget:
         return _build_history_tab_for(self)
+
+    def _build_custom_tab(self) -> QWidget:
+        return _CustomPanel(self)
 
     # ---------- 편의: 변경 → 저장 ----------
 
@@ -1352,3 +1355,364 @@ class _HistoryPanel(QWidget):
 
 def _build_history_tab_for(sw: "SettingsWindow") -> QWidget:
     return _HistoryPanel(sw)
+
+
+# ---------- 커스터마이즈 탭 ----------
+
+CHARACTERS = [
+    ("happy",   "기본"),
+    ("excited", "신남"),
+    ("sleepy",  "졸림"),
+]
+
+
+class _CharacterCard(QFrame):
+    """캐릭터 선택 카드. 그라디언트 배경 + Droplet + 이름 라벨."""
+
+    def __init__(self, char_id: str, name: str, selected: bool,
+                 on_click: Callable[[str], None], parent=None):
+        super().__init__(parent)
+        self.setObjectName("charCard")
+        self._id = char_id
+        self._selected = selected
+        self._on_click = on_click
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(130)
+        self.setAttribute(Qt.WA_Hover, True)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 16, 10, 10)
+        root.setSpacing(6)
+
+        self._droplet = Droplet(size=tokens.POPUP_DROPLET_SIZE, mood=char_id)
+        root.addWidget(self._droplet, alignment=Qt.AlignCenter)
+
+        tag = QLabel("GIF / Lottie")
+        tag.setAlignment(Qt.AlignCenter)
+        tag.setStyleSheet(
+            f"font-family: {tokens.FONT_MONO}; font-size: 9px; color: {tokens.SKY_700};"
+            f"background: transparent; margin-top: 2px;"
+        )
+        root.addWidget(tag)
+
+        self._name = QLabel(name)
+        self._name.setAlignment(Qt.AlignCenter)
+        root.addWidget(self._name)
+
+        self._apply_style()
+
+    def _apply_style(self):
+        if self._selected:
+            self.setStyleSheet(f"""
+                QFrame#charCard {{
+                    background-color: {tokens.SKY_50};
+                    border: 2px solid {tokens.SKY_500};
+                    border-radius: 16px;
+                }}
+                QFrame#charCard QLabel {{
+                    color: {tokens.SKY_700};
+                    font-family: {tokens.FONT_UI};
+                    font-size: 13px;
+                    font-weight: 600;
+                    background: transparent;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QFrame#charCard {{
+                    background-color: {tokens.SKY_50};
+                    border: 2px solid transparent;
+                    border-radius: 16px;
+                }}
+                QFrame#charCard:hover {{
+                    border-color: {tokens.SKY_300};
+                }}
+                QFrame#charCard QLabel {{
+                    color: {tokens.INK_2};
+                    font-family: {tokens.FONT_UI};
+                    font-size: 13px;
+                    background: transparent;
+                }}
+            """)
+
+    def set_selected(self, selected: bool):
+        if selected == self._selected:
+            return
+        self._selected = selected
+        self._apply_style()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self._on_click(self._id)
+        super().mouseReleaseEvent(event)
+
+
+class _UploadSlot(QFrame):
+    """'+ 직접 업로드' 점선 카드 — v2에서는 디스플레이만, 클릭 시 안내."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("uploadSlot")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(130)
+        self.setStyleSheet(f"""
+            QFrame#uploadSlot {{
+                background-color: {tokens.SURFACE_2};
+                border: 2px dashed {tokens.LINE_2};
+                border-radius: 16px;
+            }}
+            QFrame#uploadSlot:hover {{
+                border-color: {tokens.SKY_300};
+            }}
+            QFrame#uploadSlot QLabel {{ background: transparent; }}
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 16, 10, 10)
+        root.setSpacing(6)
+        plus = QLabel("＋")
+        plus.setAlignment(Qt.AlignCenter)
+        plus.setStyleSheet(
+            f"font-size: 36px; color: {tokens.SKY_500};"
+        )
+        plus.setFixedHeight(72)
+        root.addWidget(plus, alignment=Qt.AlignCenter)
+        tag = QLabel("GIF / Lottie")
+        tag.setAlignment(Qt.AlignCenter)
+        tag.setStyleSheet(
+            f"font-family: {tokens.FONT_MONO}; font-size: 9px; color: {tokens.INK_3};"
+            f"margin-top: 2px;"
+        )
+        root.addWidget(tag)
+        nm = QLabel("직접 업로드")
+        nm.setAlignment(Qt.AlignCenter)
+        nm.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 13px; color: {tokens.INK_2};"
+        )
+        root.addWidget(nm)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            QMessageBox.information(
+                self, "준비 중",
+                "사용자 이미지 업로드는 다음 버전에서 지원됩니다.\n"
+                "지금은 기본/신남/졸림 캐릭터 중 선택해 주세요."
+            )
+        super().mouseReleaseEvent(event)
+
+
+class _MessageRow(QWidget):
+    """메시지 한 줄: 입력 + × 삭제 버튼."""
+
+    def __init__(self, text: str,
+                 on_edit: Callable[[str], None],
+                 on_delete: Callable[[], None],
+                 parent=None):
+        super().__init__(parent)
+        self._on_edit = on_edit
+        self._on_delete = on_delete
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
+
+        self._edit = QLineEdit(text)
+        self._edit.setStyleSheet(f"""
+            QLineEdit {{
+                font-family: {tokens.FONT_UI};
+                font-size: 14px;
+                color: {tokens.INK};
+                background-color: {tokens.SURFACE};
+                border: 1.5px solid {tokens.LINE_2};
+                border-radius: 10px;
+                padding: 9px 14px;
+            }}
+            QLineEdit:focus {{ border-color: {tokens.SKY_400}; }}
+            QLineEdit::placeholder {{ color: {tokens.INK_3}; }}
+        """)
+        self._edit.setPlaceholderText("표시할 메시지")
+        # 포커스 벗어날 때(editingFinished) 저장 — 타이핑할 때마다 저장하지 않음
+        self._edit.editingFinished.connect(self._handle_edit_done)
+        root.addWidget(self._edit, 1)
+
+        self._del = QPushButton()
+        self._del.setCursor(Qt.PointingHandCursor)
+        self._del.setFixedSize(32, 32)
+        self._del.setText("✕")
+        self._del.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {tokens.SURFACE_2};
+                color: {tokens.INK_3};
+                border: none;
+                border-radius: 16px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{ background-color: {tokens.SKY_50}; color: {tokens.SKY_700}; }}
+        """)
+        self._del.clicked.connect(self._on_delete)
+        root.addWidget(self._del)
+
+    def _handle_edit_done(self):
+        self._on_edit(self._edit.text().strip())
+
+
+class _CustomPanel(QWidget):
+    """커스터마이즈 탭: 캐릭터 선택 + 메시지 목록."""
+
+    def __init__(self, sw: "SettingsWindow", parent=None):
+        super().__init__(parent)
+        self._sw = sw
+        self.setStyleSheet(f"background-color: {tokens.SURFACE};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ---- 캐릭터 이미지 ----
+        char_section = Section("캐릭터 이미지",
+                               hint="팝업에 표시할 이미지를 선택하세요")
+        root.addWidget(char_section)
+
+        self._char_cards: list[_CharacterCard] = []
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(0)
+
+        for col, (cid, name) in enumerate(CHARACTERS):
+            card = _CharacterCard(cid, name,
+                                  selected=(sw._cfg.character_id == cid),
+                                  on_click=self._on_character_click)
+            self._char_cards.append(card)
+            grid.addWidget(card, 0, col)
+        grid.addWidget(_UploadSlot(), 0, len(CHARACTERS))
+        char_section.add_layout(grid)
+
+        # 파일 선택 버튼 (placeholder)
+        file_btn = self._make_secondary("📁 파일에서 선택...")
+        file_btn.clicked.connect(lambda: QMessageBox.information(
+            self, "준비 중", "사용자 이미지 업로드는 다음 버전에서 지원됩니다."
+        ))
+        file_btn_row = QHBoxLayout()
+        file_btn_row.setContentsMargins(0, tokens.SP_LG, 0, 0)
+        file_btn_row.addWidget(file_btn, alignment=Qt.AlignLeft)
+        file_btn_row.addStretch(1)
+        char_section.add_layout(file_btn_row)
+
+        # ---- 알림 메시지 ----
+        msg_section = Section("알림 메시지",
+                              hint="랜덤하게 보여질 메시지 목록이에요")
+        root.addWidget(msg_section)
+
+        self._msg_list_holder = QWidget()
+        self._msg_list_layout = QVBoxLayout(self._msg_list_holder)
+        self._msg_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._msg_list_layout.setSpacing(10)
+        msg_section.add(self._msg_list_holder)
+        self._rebuild_messages()
+
+        add_msg_btn = self._make_secondary("+ 메시지 추가")
+        add_msg_btn.clicked.connect(self._on_add_message)
+        add_row = QHBoxLayout()
+        add_row.setContentsMargins(0, tokens.SP_LG, 0, 0)
+        add_row.addWidget(add_msg_btn, alignment=Qt.AlignLeft)
+        add_row.addStretch(1)
+        msg_section.add_layout(add_row)
+
+        root.addStretch(1)
+
+    # ---------- helpers ----------
+
+    def _make_secondary(self, label: str) -> QPushButton:
+        btn = QPushButton(label)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {tokens.SURFACE};
+                color: {tokens.SKY_700};
+                border: 1.5px solid {tokens.SKY_300};
+                border-radius: 999px;
+                padding: 8px 16px;
+                font-family: {tokens.FONT_UI};
+                font-size: 13px;
+            }}
+            QPushButton:hover {{ background-color: {tokens.SKY_50}; }}
+        """)
+        return btn
+
+    # ---------- 캐릭터 ----------
+
+    def _on_character_click(self, char_id: str):
+        for card in self._char_cards:
+            card.set_selected(card._id == char_id)
+        self._sw._apply(character_id=char_id)
+
+    # ---------- 메시지 ----------
+
+    def _rebuild_messages(self):
+        while self._msg_list_layout.count():
+            item = self._msg_list_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        messages = list(self._sw._cfg.messages)
+        if not messages:
+            hint = QLabel("메시지가 없습니다. 아래 버튼으로 추가하세요.")
+            hint.setStyleSheet(
+                f"font-family: {tokens.FONT_UI}; font-size: 13px; color: {tokens.INK_3};"
+                f"background: transparent; padding: 4px 0;"
+            )
+            self._msg_list_layout.addWidget(hint)
+            return
+
+        for i, text in enumerate(messages):
+            row = _MessageRow(
+                text,
+                on_edit=lambda new_text, idx=i: self._on_edit_message(idx, new_text),
+                on_delete=lambda idx=i: self._on_delete_message(idx),
+            )
+            self._msg_list_layout.addWidget(row)
+
+    def _on_edit_message(self, index: int, new_text: str):
+        if not new_text:
+            # 빈 문자열이면 삭제와 동일 취급
+            self._on_delete_message(index)
+            return
+        new_cfg = config_mod.update_message(self._sw._cfg, index, new_text)
+        self._sw._cfg = new_cfg
+        try:
+            config_mod.save(new_cfg)
+        except ValueError:
+            return
+        self._sw._on_save(new_cfg)
+        # 리스트 자체는 재빌드 불필요 (행이 자기 텍스트를 이미 가짐). 다만
+        # 최초 추가 후 빈 plaheolder가 있으면 제거하기 위해 한 번 재빌드:
+        # 간단히 전체 rebuild — 비용 미미
+        # 여기선 타이핑 중 포커스 이동 이슈 피하기 위해 재빌드 생략.
+
+    def _on_delete_message(self, index: int):
+        new_cfg = config_mod.remove_message(self._sw._cfg, index)
+        self._sw._cfg = new_cfg
+        try:
+            config_mod.save(new_cfg)
+        except ValueError:
+            return
+        self._sw._on_save(new_cfg)
+        self._rebuild_messages()
+
+    def _on_add_message(self):
+        new_cfg = config_mod.add_message(self._sw._cfg, "")
+        self._sw._cfg = new_cfg
+        # 빈 메시지는 save 전 validate 통과. 사용자가 타이핑 후 editingFinished 시 저장.
+        try:
+            config_mod.save(new_cfg)
+        except ValueError:
+            return
+        self._sw._on_save(new_cfg)
+        self._rebuild_messages()
+        # 마지막 입력 필드에 포커스
+        count = self._msg_list_layout.count()
+        if count:
+            last = self._msg_list_layout.itemAt(count - 1).widget()
+            if isinstance(last, _MessageRow):
+                last._edit.setFocus()
