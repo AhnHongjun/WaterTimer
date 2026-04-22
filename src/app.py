@@ -8,7 +8,7 @@
 - 설정 창 (알림 탭부터 확장 중)
 - 종료
 
-아직 없음(후속 Task): 중복 실행 방지, 에러 로깅.
+Phase 3 완료: 자동 시작 레지스트리, 중복 실행 방지, 에러 로깅 모두 구현됨.
 """
 from __future__ import annotations
 
@@ -148,6 +148,8 @@ class Application:
 
 
 def main():
+    from src.error_log import install_excepthook
+    install_excepthook()
     from src.single_instance import SingleInstanceGuard, AlreadyRunning
     try:
         with SingleInstanceGuard():
