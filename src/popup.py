@@ -294,9 +294,9 @@ class Popup(QWidget):
         self._primary_btn = self._make_primary("마셨어요!")
         self._primary_btn.clicked.connect(self._handle_drank)
         buttons.addWidget(self._primary_btn, 1)
-        secondary = self._make_secondary("5분 뒤")
-        secondary.clicked.connect(self._handle_snooze)
-        buttons.addWidget(secondary)
+        self._secondary_btn = self._make_secondary("5분 뒤")
+        self._secondary_btn.clicked.connect(self._handle_snooze)
+        buttons.addWidget(self._secondary_btn)
         right.addLayout(buttons)
 
         root.addLayout(right, 1)
@@ -463,8 +463,13 @@ class Popup(QWidget):
     # ---------- 액션 ----------
 
     def _handle_drank(self):
-        if self._closed:
+        if self._closed or getattr(self, "_drank_fired", False):
             return
+        self._drank_fired = True
+        # 두 버튼 모두 즉시 비활성화해 중복 입력 방지
+        self._primary_btn.setEnabled(False)
+        self._secondary_btn.setEnabled(False)
+        self._close_btn.setEnabled(False)
         self._count = min(self._count + 1, self._goal)
         self._progress.set_progress(min(self._count / self._goal, 1.0))
         remain = max(0, self._goal - self._count)
@@ -484,9 +489,12 @@ class Popup(QWidget):
             self.close()
 
     def _handle_snooze(self):
-        if self._closed:
+        if self._closed or getattr(self, "_drank_fired", False):
             return
         self._closed = True
+        self._primary_btn.setEnabled(False)
+        self._secondary_btn.setEnabled(False)
+        self._close_btn.setEnabled(False)
         try:
             self._on_snooze()
         finally:
