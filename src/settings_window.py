@@ -360,6 +360,9 @@ class SettingsWindow(QDialog):
     def _build_custom_tab(self) -> QWidget:
         return _CustomPanel(self)
 
+    def _build_sound_tab(self) -> QWidget:
+        return _SoundPanel(self)
+
     # ---------- 편의: 변경 → 저장 ----------
 
     def _apply(self, **changes) -> None:
@@ -1710,3 +1713,304 @@ class _CustomPanel(QWidget):
             last = self._msg_list_layout.itemAt(count - 1).widget()
             if isinstance(last, _MessageRow):
                 last._edit.setFocus()
+
+
+# ---------- 공용: Pill Toggle Switch ----------
+
+class _Toggle(QWidget):
+    """38×22 pill 토글 스위치. 디자인 spec: off=line-2 track, on=sky-500, 18px 흰 thumb."""
+
+    def __init__(self, initial: bool, on_change: Callable[[bool], None], parent=None):
+        super().__init__(parent)
+        self._on = bool(initial)
+        self._on_change = on_change
+        self._hover = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(38, 22)
+        self.setAttribute(Qt.WA_Hover, True)
+
+    def is_on(self) -> bool:
+        return self._on
+
+    def set_on(self, on: bool, emit: bool = True):
+        if on == self._on:
+            return
+        self._on = on
+        self.update()
+        if emit:
+            self._on_change(on)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.set_on(not self._on)
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+        # Track
+        track_color = QColor(tokens.SKY_500 if self._on else tokens.LINE_2)
+        p.setPen(Qt.NoPen)
+        p.setBrush(track_color)
+        p.drawRoundedRect(QRectF(rect), rect.height() / 2, rect.height() / 2)
+        # Thumb
+        thumb_d = 18
+        x = rect.width() - thumb_d - 2 if self._on else 2
+        y = 2
+        p.setBrush(QColor("#ffffff"))
+        p.drawEllipse(x, y, thumb_d, thumb_d)
+        # Thumb 그림자 효과(작은 1px offset)
+        p.setBrush(QColor(0, 0, 0, 30))
+        p.setPen(Qt.NoPen)
+        # 그림자는 그냥 얇은 반투명 원
+        # (완전히 정확하진 않지만 디자인상 충분)
+
+
+# ---------- 사운드 탭 ----------
+
+SOUNDS = [
+    ("drop",   "물방울"),
+    ("chime",  "차임"),
+    ("bubble", "뽀글뽀글"),
+    ("soft",   "부드러운 소리"),
+    ("off",    "무음"),
+]
+
+
+class _SoundRow(QFrame):
+    """알림음 선택 카드 한 줄: 라디오 인디케이터 + 이름 + 미리듣기 버튼."""
+
+    def __init__(self, sound_id: str, label: str, selected: bool,
+                 on_click: Callable[[str], None],
+                 on_preview: Callable[[str], None],
+                 parent=None):
+        super().__init__(parent)
+        self.setObjectName("soundRow")
+        self._id = sound_id
+        self._selected = selected
+        self._on_click = on_click
+        self._on_preview = on_preview
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setFixedHeight(48)
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(16, 0, 12, 0)
+        root.setSpacing(12)
+
+        # 라디오 인디케이터 (18×18)
+        self._indicator = _RadioIndicator(selected)
+        root.addWidget(self._indicator, alignment=Qt.AlignVCenter)
+
+        # 라벨
+        self._label = QLabel(label)
+        root.addWidget(self._label, 1)
+
+        # 미리듣기 버튼 (ghost)
+        preview_btn = QPushButton("미리듣기")
+        preview_btn.setCursor(Qt.PointingHandCursor)
+        preview_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                color: {tokens.INK_2};
+                border: none;
+                padding: 4px 10px;
+                font-family: {tokens.FONT_UI};
+                font-size: 12px;
+            }}
+            QPushButton:hover {{ color: {tokens.SKY_700}; background-color: {tokens.SURFACE}; border-radius: 8px; }}
+        """)
+        preview_btn.clicked.connect(lambda: self._on_preview(self._id))
+        root.addWidget(preview_btn)
+
+        self._apply_style()
+
+    def _apply_style(self):
+        if self._selected:
+            self.setStyleSheet(f"""
+                QFrame#soundRow {{
+                    background-color: {tokens.SKY_50};
+                    border: 1.5px solid {tokens.SKY_300};
+                    border-radius: 12px;
+                }}
+                QFrame#soundRow QLabel {{
+                    color: {tokens.SKY_700};
+                    font-family: {tokens.FONT_UI};
+                    font-size: 14px;
+                    font-weight: 600;
+                    background: transparent;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QFrame#soundRow {{
+                    background-color: {tokens.SURFACE_2};
+                    border: 1.5px solid transparent;
+                    border-radius: 12px;
+                }}
+                QFrame#soundRow:hover {{
+                    border-color: {tokens.SKY_200};
+                }}
+                QFrame#soundRow QLabel {{
+                    color: {tokens.INK};
+                    font-family: {tokens.FONT_UI};
+                    font-size: 14px;
+                    background: transparent;
+                }}
+            """)
+
+    def set_selected(self, selected: bool):
+        if selected == self._selected:
+            return
+        self._selected = selected
+        self._indicator.set_selected(selected)
+        self._apply_style()
+
+    def mouseReleaseEvent(self, event):
+        # 클릭이 preview 버튼 영역이 아닐 때만 선택
+        if event.button() == Qt.LeftButton:
+            pos = event.position().toPoint()
+            # 자식이 이미 처리한 경우(이벤트 accepted)엔 여기 안 옴
+            if self.rect().contains(pos):
+                self._on_click(self._id)
+        super().mouseReleaseEvent(event)
+
+
+class _RadioIndicator(QWidget):
+    """18×18 원형 라디오 인디케이터."""
+
+    def __init__(self, selected: bool, parent=None):
+        super().__init__(parent)
+        self._selected = selected
+        self.setFixedSize(18, 18)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def set_selected(self, selected: bool):
+        if selected == self._selected:
+            return
+        self._selected = selected
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        if self._selected:
+            # sky-500 border + sky-500 fill + 작은 흰 점
+            p.setPen(QPen(QColor(tokens.SKY_500), 2))
+            p.setBrush(QColor(tokens.SKY_500))
+            p.drawEllipse(rect)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#ffffff"))
+            inner = rect.adjusted(4, 4, -4, -4)
+            p.drawEllipse(inner)
+        else:
+            p.setPen(QPen(QColor(tokens.LINE_2), 2))
+            p.setBrush(QColor("#ffffff"))
+            p.drawEllipse(rect)
+
+
+class _SoundPanel(QWidget):
+    """사운드 탭."""
+
+    def __init__(self, sw: "SettingsWindow", parent=None):
+        super().__init__(parent)
+        self._sw = sw
+        self.setStyleSheet(f"background-color: {tokens.SURFACE};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ---- Section: 알림음 ----
+        s1 = Section("알림음")
+        root.addWidget(s1)
+
+        # 소리 켜기 토글
+        toggle_row = KVRow("소리 켜기")
+        self._toggle = _Toggle(sw._cfg.sound_enabled, self._on_toggle_enabled)
+        toggle_row.set_control(self._toggle)
+        s1.add(toggle_row)
+
+        # 볼륨
+        vol_row = KVRow("볼륨", hint=f"{sw._cfg.volume}%")
+        self._vol_hint_row = vol_row   # hint 업데이트용 참조
+        vol_container = QWidget()
+        vol_container.setFixedWidth(240)
+        vol_container.setAttribute(Qt.WA_TranslucentBackground)
+        vol_lay = QHBoxLayout(vol_container)
+        vol_lay.setContentsMargins(0, 0, 0, 0)
+        vol_lay.setSpacing(12)
+
+        self._vol_slider = QSlider(Qt.Horizontal)
+        self._vol_slider.setMinimum(0)
+        self._vol_slider.setMaximum(100)
+        self._vol_slider.setValue(sw._cfg.volume)
+        self._vol_slider.setStyleSheet(_SLIDER_STYLE)
+        self._vol_slider.setEnabled(sw._cfg.sound_enabled)
+        self._vol_slider.valueChanged.connect(self._on_volume_changed)
+        vol_lay.addWidget(self._vol_slider, 1)
+
+        self._vol_label = QLabel(str(sw._cfg.volume))
+        self._vol_label.setFixedWidth(36)
+        self._vol_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._vol_label.setStyleSheet(
+            f"font-family: {tokens.FONT_FUN}; font-size: 16px; font-weight: 700;"
+            f"color: {tokens.SKY_600}; background: transparent;"
+        )
+        vol_lay.addWidget(self._vol_label)
+        vol_row.set_control(vol_container)
+        s1.add(vol_row)
+
+        # ---- Section: 알림음 선택 ----
+        s2 = Section("알림음 선택")
+        root.addWidget(s2)
+
+        self._sound_rows: list[_SoundRow] = []
+        sound_wrap = QWidget()
+        sound_wrap.setStyleSheet("background: transparent;")
+        sound_lay = QVBoxLayout(sound_wrap)
+        sound_lay.setContentsMargins(0, 0, 0, 0)
+        sound_lay.setSpacing(6)
+        for sid, label in SOUNDS:
+            row = _SoundRow(
+                sid, label,
+                selected=(sw._cfg.sound_name == sid),
+                on_click=self._on_sound_selected,
+                on_preview=self._on_preview,
+            )
+            self._sound_rows.append(row)
+            sound_lay.addWidget(row)
+        s2.add(sound_wrap)
+
+        root.addStretch(1)
+
+    # ---------- 핸들러 ----------
+
+    def _on_toggle_enabled(self, on: bool):
+        self._sw._apply(sound_enabled=on)
+        self._vol_slider.setEnabled(on)
+
+    def _on_volume_changed(self, v: int):
+        self._vol_label.setText(str(v))
+        # KVRow의 hint 라벨은 직접 접근하기 복잡하니 생략 (큰 숫자 라벨이 있어 정보 중복)
+        self._sw._apply(volume=int(v))
+
+    def _on_sound_selected(self, sound_id: str):
+        for row in self._sound_rows:
+            row.set_selected(row._id == sound_id)
+        self._sw._apply(sound_name=sound_id)
+
+    def _on_preview(self, sound_id: str):
+        QMessageBox.information(
+            self, "준비 중",
+            f"'{dict(SOUNDS).get(sound_id, sound_id)}' 미리듣기는 다음 버전에서 지원됩니다."
+        )
