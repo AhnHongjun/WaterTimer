@@ -52,6 +52,17 @@ def test_valid_interval_accepted(minutes):
     config.validate_interval_minutes(minutes)  # no raise
 
 
+@pytest.mark.parametrize("seconds", [2, 0, -1, 61, 100])
+def test_invalid_auto_close_rejected(seconds):
+    with pytest.raises(ValueError):
+        config.validate_auto_close(seconds)
+
+
+@pytest.mark.parametrize("seconds", [3, 12, 60])
+def test_valid_auto_close_accepted(seconds):
+    config.validate_auto_close(seconds)  # no raise
+
+
 def test_active_start_must_be_before_end():
     with pytest.raises(ValueError):
         config.validate_active_window("22:00", "09:00")
