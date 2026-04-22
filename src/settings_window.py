@@ -32,7 +32,9 @@ class SettingsWindow(QDialog):
                  current_count: int,
                  on_save: Callable[[config_mod.Config], None],
                  on_reset_count: Callable[[], None],
-                 parent=None):
+                 parent=None,
+                 history=None,        # v2 신규 인자 (Task 32에서 본격 사용)
+                 on_add_cup=None):    # v2 신규 인자
         super().__init__(parent)
         self.setWindowTitle("Water Timer 설정")
         self.resize(520, 420)
@@ -40,6 +42,8 @@ class SettingsWindow(QDialog):
         self._current_count = current_count
         self._on_save = on_save
         self._on_reset_count = on_reset_count
+        self._history = history or []
+        self._on_add_cup = on_add_cup or (lambda: None)
 
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()

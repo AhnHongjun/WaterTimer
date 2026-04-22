@@ -2,16 +2,18 @@
 
 동작:
 - 트레이 아이콘 상주
-- 1분마다 scheduler tick → 조건 맞으면 팝업
+- 1분마다 scheduler tick → 조건 맞으면 팝업 (요일 + 활성시간 필터)
 - '지금 바로 알림 보기'로 수동 테스트
 - 일시정지/재개
-- 설정 창 (알림 탭부터 확장 중)
+- 5분 뒤 스누즈 (팝업 내 버튼)
+- 설정 창 (5탭)
 - 종료
 
 Phase 3 완료: 자동 시작 레지스트리, 중복 실행 방지, 에러 로깅 모두 구현됨.
 """
 from __future__ import annotations
 
+import random
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -37,7 +39,7 @@ class Application:
         self.cfg = config_mod.load()
         self.state = state_mod.load()
         self.paused = False
-        self.last_set_id: Optional[str] = None
+        self._last_message_index: Optional[int] = None
         self.active_popup: Optional[Popup] = None
 
         self.tray = Tray(
@@ -49,8 +51,8 @@ class Application:
         )
         self.tray.show()
         self.tray.set_count(self.state.count)
-        if not self.cfg.sets:
-            self.tray.set_warning("등록된 이미지·메시지 세트가 없습니다. 설정에서 추가하세요.")
+        if not self.cfg.messages:
+            self.tray.set_warning("알림 메시지가 비어있습니다. 설정의 '커스터마이즈'에서 추가하세요.")
 
         self.timer = QTimer(self.qt_app)
         self.timer.timeout.connect(self.tick)
@@ -67,42 +69,79 @@ class Application:
         exe = autostart.current_exe_path()
         autostart.set_autostart(self.cfg.autostart, exe)
 
-    # ---------- 콜백 ----------
+    # ---------- 메시지 선택 ----------
+
+    def _pick_message(self) -> Optional[str]:
+        """직전 메시지와 연속 중복을 피해 random 선택. 메시지가 없으면 None."""
+        msgs = self.cfg.messages
+        if not msgs:
+            return None
+        if len(msgs) == 1:
+            self._last_message_index = 0
+            return msgs[0]
+        candidates = [i for i in range(len(msgs)) if i != self._last_message_index]
+        idx = random.choice(candidates or list(range(len(msgs))))
+        self._last_message_index = idx
+        return msgs[idx]
+
+    # ---------- tick & 발화 ----------
 
     def tick(self):
         # 날짜 전환 감지
         reloaded = state_mod.load()
         if reloaded.date != self.state.date:
             self.state = reloaded
-            self.last_set_id = None
+            self._last_message_index = None
             self.tray.set_count(self.state.count)
 
         now = datetime.now()
-        if not scheduler.should_fire(now=now, cfg=self.cfg, state=self.state, paused=self.paused):
+        if not self._should_fire_now(now):
             return
         if self.active_popup is not None and self.active_popup.isVisible():
             return  # 이전 팝업 아직 떠 있음
         self.show_popup(now)
 
+    def _should_fire_now(self, now: datetime) -> bool:
+        """v2: scheduler.should_fire + 요일 필터 + messages 비어있으면 skip."""
+        if not self.cfg.messages:
+            return False
+        # weekday(): 월=0 ~ 일=6  — cfg.days와 동일 규칙
+        if now.weekday() not in self.cfg.days:
+            return False
+        # 기존 순수 로직 재사용 (간격·활성시간·일시정지).
+        # scheduler는 sets 기반이지만 여기선 messages만 체크하면 되므로
+        # 임시 Config 복제를 만들지 않고 직접 세 가지 조건을 검증한다.
+        if self.paused:
+            return False
+        if not scheduler._in_active_window(now, self.cfg.active_start, self.cfg.active_end):
+            return False
+        if self.state.last_notified_at is None:
+            return True
+        elapsed = now - self.state.last_notified_at
+        return elapsed.total_seconds() >= self.cfg.interval_minutes * 60
+
     def force_notify(self):
         if self.active_popup is not None and self.active_popup.isVisible():
             return
-        if not self.cfg.sets:
-            self.tray.showMessage("Water Timer", "등록된 세트가 없어요", icon=self.tray.Information)
+        if not self.cfg.messages:
+            self.tray.showMessage("Water Timer", "알림 메시지가 없어요", icon=self.tray.Information)
             return
         self.show_popup(datetime.now(), force=True)
 
     def show_popup(self, now: datetime, force: bool = False):
-        chosen = scheduler.select_set(sets=self.cfg.sets, last_id=self.last_set_id)
-        if chosen is None:
+        message = self._pick_message()
+        if message is None:
             return
-        self.last_set_id = chosen.id
         self.active_popup = Popup(
-            image_path=chosen.image_path,
-            message=chosen.message,
+            character_id=self.cfg.character_id,
+            message=message,
             auto_close_seconds=self.cfg.auto_close_seconds,
             position=self.cfg.popup_position,
+            count=self.state.count,
+            goal=self.cfg.goal,
+            last_notified_at=self.state.last_notified_at,
             on_drank=self.on_drank,
+            on_snooze=self.on_snooze,
         )
         self.active_popup.show()
         if not force:
@@ -111,6 +150,11 @@ class Application:
     def on_drank(self):
         self.state = state_mod.increment_count(self.state)
         self.tray.set_count(self.state.count)
+
+    def on_snooze(self):
+        """5분 뒤 재알림. 현재 팝업이 끝난 뒤 one-shot으로 force_notify."""
+        snooze_ms = max(1, self.cfg.snooze_minutes) * 60 * 1000
+        QTimer.singleShot(snooze_ms, self.force_notify)
 
     def toggle_pause(self):
         self.paused = not self.paused
@@ -121,8 +165,10 @@ class Application:
         dlg = SettingsWindow(
             cfg=self.cfg,
             current_count=self.state.count,
+            history=self.state.history,
             on_save=self._on_config_saved,
             on_reset_count=self._reset_count,
+            on_add_cup=self._add_cup,
         )
         dlg.exec()
 
@@ -132,10 +178,15 @@ class Application:
         state_mod.save(self.state)
         self.tray.set_count(0)
 
+    def _add_cup(self):
+        """기록 탭의 '+ 한잔' 버튼용: 카운트 +1."""
+        self.state = state_mod.increment_count(self.state)
+        self.tray.set_count(self.state.count)
+
     def _on_config_saved(self, new_cfg):
         self.cfg = new_cfg
-        if not self.cfg.sets:
-            self.tray.set_warning("등록된 이미지·메시지 세트가 없습니다. 설정에서 추가하세요.")
+        if not self.cfg.messages:
+            self.tray.set_warning("알림 메시지가 비어있습니다. 설정의 '커스터마이즈'에서 추가하세요.")
         else:
             self.tray.set_warning(None)
         self._sync_autostart()
