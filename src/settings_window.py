@@ -354,6 +354,9 @@ class SettingsWindow(QDialog):
     def _build_notify_tab(self) -> QWidget:
         return _build_notify_tab_for(self)
 
+    def _build_history_tab(self) -> QWidget:
+        return _build_history_tab_for(self)
+
     # ---------- 편의: 변경 → 저장 ----------
 
     def _apply(self, **changes) -> None:
@@ -950,6 +953,315 @@ def _build_notify_tab_for(sw: "SettingsWindow") -> QWidget:
         grid.addWidget(card, 0, col)
 
     pos_section.add_layout(grid)
+
+    lay.addStretch(1)
+    return root
+
+
+# ---------- 기록 탭 ----------
+
+def _compute_week(history, today_count: int, today_date_str: str) -> tuple[list[int], list[str]]:
+    """최근 7일의 카운트와 요일 라벨. 오늘을 마지막 자리로.
+
+    history: list[DayRecord] (오래된 것부터 시작). 오늘 날짜는 보통 없다 (아직 roll-over 전이므로).
+    """
+    from datetime import date as dt_date, timedelta
+    # 오늘 날짜 파싱
+    try:
+        yy, mm, dd = map(int, today_date_str.split("-"))
+        today = dt_date(yy, mm, dd)
+    except Exception:
+        today = dt_date.today()
+
+    # 최근 6일 각각의 count를 history에서 찾고 없으면 0
+    date_to_count = {r.date: r.count for r in history}
+    week_counts: list[int] = []
+    week_labels: list[str] = []
+    day_names = ["월", "화", "수", "목", "금", "토", "일"]
+    for i in range(6, 0, -1):
+        d = today - timedelta(days=i)
+        iso = d.isoformat()
+        week_counts.append(date_to_count.get(iso, 0))
+        week_labels.append(day_names[d.weekday()])
+    # 오늘
+    week_counts.append(today_count)
+    week_labels.append(day_names[today.weekday()])
+    return week_counts, week_labels
+
+
+def _compute_stats(history, today_count: int, today_date_str: str, goal: int) -> dict:
+    """주 평균 / 연속 달성 / 이번 달 합계."""
+    from datetime import date as dt_date, timedelta
+    try:
+        yy, mm, dd = map(int, today_date_str.split("-"))
+        today = dt_date(yy, mm, dd)
+    except Exception:
+        today = dt_date.today()
+
+    week_counts, _ = _compute_week(history, today_count, today_date_str)
+    weekly_avg = sum(week_counts) / max(1, len(week_counts))
+
+    # 연속 달성: 어제부터 거꾸로 연속해서 goal 이상인 날 수
+    date_to_count = {r.date: r.count for r in history}
+    streak = 0
+    d = today - timedelta(days=1)
+    while True:
+        iso = d.isoformat()
+        c = date_to_count.get(iso)
+        if c is None or c < goal:
+            break
+        streak += 1
+        d = d - timedelta(days=1)
+    # 오늘도 달성했으면 +1
+    if today_count >= goal:
+        streak += 1
+
+    # 이번 달 합계: 현재 년-월로 시작하는 date의 count 합 + 오늘 카운트
+    month_prefix = f"{today.year:04d}-{today.month:02d}"
+    this_month = sum(r.count for r in history if r.date.startswith(month_prefix))
+    this_month += today_count
+
+    return {
+        "weekly_avg": weekly_avg,
+        "streak": streak,
+        "this_month": this_month,
+    }
+
+
+class _WeeklyBar(QWidget):
+    """주간 차트 하나의 막대 (숫자 위 + 막대 + 요일 라벨 아래)."""
+
+    def __init__(self, count: int, day_label: str, ratio: float, is_today: bool, parent=None):
+        super().__init__(parent)
+        self._is_today = is_today
+        self._ratio = ratio
+        self.setMinimumWidth(28)
+        self.setMaximumWidth(60)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(8)
+
+        num = QLabel(str(count))
+        num.setAlignment(Qt.AlignCenter)
+        num.setStyleSheet(f"""
+            font-family: {tokens.FONT_FUN};
+            font-size: 14px;
+            font-weight: 700;
+            color: {tokens.SKY_600 if is_today else tokens.INK_3};
+            background: transparent;
+        """)
+        root.addWidget(num)
+
+        # 막대 영역
+        self._bar_area = QWidget()
+        self._bar_area.setFixedHeight(150)
+        self._bar_area.setAttribute(Qt.WA_TransparentForMouseEvents)
+        # 바닥 정렬을 위해 레이아웃 대신 paintEvent에서 직접 그림
+        self._bar_area.paintEvent = self._paint_bar
+        root.addWidget(self._bar_area)
+
+        day = QLabel(day_label)
+        day.setAlignment(Qt.AlignCenter)
+        day.setStyleSheet(f"""
+            font-family: {tokens.FONT_UI};
+            font-size: 12px;
+            font-weight: {'600' if is_today else '400'};
+            color: {tokens.SKY_700 if is_today else tokens.INK_3};
+            background: transparent;
+        """)
+        root.addWidget(day)
+
+    def _paint_bar(self, _):
+        from PySide6.QtGui import QPainter, QLinearGradient
+        p = QPainter(self._bar_area)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = self._bar_area.rect()
+        bar_w = 20
+        max_h = rect.height()
+        bar_h = max(8, int(max_h * self._ratio))
+        x = (rect.width() - bar_w) // 2
+        y = rect.height() - bar_h
+        if self._is_today:
+            grad = QLinearGradient(x, y, x, y + bar_h)
+            grad.setColorAt(0.0, QColor(tokens.SKY_400))
+            grad.setColorAt(1.0, QColor(tokens.SKY_700))
+            p.setBrush(QBrush(grad))
+        else:
+            p.setBrush(QColor(tokens.SKY_300))
+        p.setPen(Qt.NoPen)
+        p.drawRoundedRect(x, y, bar_w, bar_h, 8, 8)
+
+
+class _StatCard(QFrame):
+    """소형 통계 카드: 라벨 + 큰 숫자 + 단위."""
+
+    def __init__(self, label: str, value: str, unit: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("statCard")
+        self.setStyleSheet(f"""
+            QFrame#statCard {{
+                background-color: {tokens.SURFACE_2};
+                border: 1px solid {tokens.LINE};
+                border-radius: 14px;
+            }}
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 12, 16, 12)
+        root.setSpacing(4)
+        l = QLabel(label)
+        l.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 12px; color: {tokens.INK_3}; background: transparent;"
+        )
+        root.addWidget(l)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        row.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
+        v = QLabel(value)
+        v.setStyleSheet(f"""
+            font-family: {tokens.FONT_FUN};
+            font-size: 26px;
+            font-weight: 700;
+            color: {tokens.SKY_600};
+            background: transparent;
+        """)
+        u = QLabel(unit)
+        u.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 12px; color: {tokens.INK_2}; background: transparent;"
+        )
+        row.addWidget(v)
+        row.addWidget(u)
+        row.addStretch(1)
+        root.addLayout(row)
+
+
+def _build_history_tab_for(sw: "SettingsWindow") -> QWidget:
+    from src.widgets.cup import Cup
+
+    root = QWidget()
+    root.setStyleSheet(f"background-color: {tokens.SURFACE};")
+    lay = QVBoxLayout(root)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+
+    hint = f"목표 {sw._cfg.goal}잔 중 {sw._current_count}잔 마셨어요"
+    section = Section("오늘의 수분 기록", hint=hint)
+    lay.addWidget(section)
+
+    # 2열 그리드
+    grid = QHBoxLayout()
+    grid.setContentsMargins(0, 8, 0, 0)
+    grid.setSpacing(tokens.SP_3XL)
+    section.add_layout(grid)
+
+    # --- 좌측: Cup 카드 ---
+    cup_card = QFrame()
+    cup_card.setObjectName("cupCard")
+    cup_card.setFixedWidth(300)
+    cup_card.setStyleSheet(f"""
+        QFrame#cupCard {{
+            background-color: {tokens.SKY_50};
+            border: 1px solid {tokens.LINE};
+            border-radius: 20px;
+        }}
+    """)
+    cup_lay = QVBoxLayout(cup_card)
+    cup_lay.setContentsMargins(16, 20, 16, 16)
+    cup_lay.setSpacing(18)
+    cup_lay.setAlignment(Qt.AlignHCenter)
+
+    cup = Cup(size=220, count=sw._current_count, goal=sw._cfg.goal)
+    cup_lay.addWidget(cup, alignment=Qt.AlignHCenter)
+
+    btn_row = QHBoxLayout()
+    btn_row.setSpacing(14)
+    btn_row.setAlignment(Qt.AlignCenter)
+
+    add_btn = QPushButton("+ 한잔")
+    add_btn.setCursor(Qt.PointingHandCursor)
+    add_btn.setStyleSheet(f"""
+        QPushButton {{
+            background-color: {tokens.SKY_500};
+            color: #ffffff;
+            border: none;
+            border-radius: 999px;
+            padding: 8px 20px;
+            font-family: {tokens.FONT_FUN};
+            font-size: 14px;
+            font-weight: 700;
+        }}
+        QPushButton:hover {{ background-color: {tokens.SKY_400}; }}
+        QPushButton:pressed {{ background-color: {tokens.SKY_600}; }}
+    """)
+
+    def on_add():
+        sw._on_add_cup()
+        sw._current_count = min(sw._current_count + 1, sw._cfg.goal)
+        cup.set_counts(sw._current_count, sw._cfg.goal)
+        # 섹션 hint 갱신을 위해 탭 재빌드 대신 hint 라벨 직접 갱신은 복잡 → 다음에 설정창 열 때 반영됨
+    add_btn.clicked.connect(on_add)
+    btn_row.addWidget(add_btn)
+
+    reset_btn = QPushButton("초기화")
+    reset_btn.setCursor(Qt.PointingHandCursor)
+    reset_btn.setStyleSheet(f"""
+        QPushButton {{
+            background: transparent;
+            color: {tokens.INK_3};
+            border: none;
+            padding: 6px 10px;
+            font-family: {tokens.FONT_UI};
+            font-size: 13px;
+        }}
+        QPushButton:hover {{ color: {tokens.SKY_700}; }}
+    """)
+
+    def on_reset():
+        sw._on_reset_count()
+        sw._current_count = 0
+        cup.set_counts(0, sw._cfg.goal)
+    reset_btn.clicked.connect(on_reset)
+    btn_row.addWidget(reset_btn)
+
+    cup_lay.addLayout(btn_row)
+    grid.addWidget(cup_card, 0)
+
+    # --- 우측: 차트 + 통계 ---
+    right = QVBoxLayout()
+    right.setSpacing(20)
+    right.setContentsMargins(0, 8, 0, 0)
+
+    # 주간 차트
+    chart_wrap = QFrame()
+    chart_wrap.setStyleSheet(f"background: transparent; border-bottom: 1px solid {tokens.LINE};")
+    chart_lay = QHBoxLayout(chart_wrap)
+    chart_lay.setContentsMargins(0, 0, 0, tokens.SP_XL)
+    chart_lay.setSpacing(12)
+    chart_lay.setAlignment(Qt.AlignBottom)
+
+    week_counts, week_labels = _compute_week(
+        sw._history, sw._current_count, sw._cfg._date_today() if hasattr(sw._cfg, "_date_today") else __import__("datetime").date.today().isoformat()
+    )
+    max_count = max(week_counts + [sw._cfg.goal])
+    for i, (c, lbl) in enumerate(zip(week_counts, week_labels)):
+        ratio = c / max_count if max_count else 0
+        bar = _WeeklyBar(count=c, day_label=lbl, ratio=ratio, is_today=(i == 6))
+        chart_lay.addWidget(bar, 1)
+    right.addWidget(chart_wrap)
+
+    # 통계 3장
+    stats = _compute_stats(sw._history, sw._current_count, __import__("datetime").date.today().isoformat(), sw._cfg.goal)
+    stat_row = QHBoxLayout()
+    stat_row.setContentsMargins(0, 0, 0, 0)
+    stat_row.setSpacing(12)
+    stat_row.addWidget(_StatCard("주 평균", f"{stats['weekly_avg']:.1f}", "잔"), 1)
+    stat_row.addWidget(_StatCard("연속 달성", f"{stats['streak']}", "일"), 1)
+    stat_row.addWidget(_StatCard("이번 달", f"{stats['this_month']}", "잔"), 1)
+    right.addLayout(stat_row)
+
+    right.addStretch(1)
+    grid.addLayout(right, 1)
 
     lay.addStretch(1)
     return root
