@@ -38,9 +38,16 @@ def resolve_image_path(stored_path: str) -> Path:
 
 
 def fallback_icon_path() -> Path:
+    # 런타임(Qt)에서는 PNG가 더 안정적. Windows 트레이는 작은 사이즈로 축소되는데
+    # 단일 사이즈 .ico는 환경에 따라 렌더링이 깨지거나 아예 안 보임. PNG는 Qt가 알아서 스케일.
     if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS) / "assets" / "icon.ico"
-    return Path(__file__).resolve().parent / "assets" / "icon.ico"
+        base = Path(sys._MEIPASS) / "assets"
+    else:
+        base = Path(__file__).resolve().parent / "assets"
+    png = base / "icon.png"
+    if png.exists():
+        return png
+    return base / "icon.ico"
 
 
 class Popup(QWidget):
