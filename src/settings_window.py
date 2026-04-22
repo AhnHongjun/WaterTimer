@@ -142,7 +142,10 @@ class SettingsWindow(QDialog):
     def _reload_sets_list(self):
         self.sets_list.clear()
         for s in self._cfg.sets:
-            self.sets_list.addItem(QListWidgetItem(f"{s.id} — {s.message[:30]}"))
+            preview = s.message[:30] + ("…" if len(s.message) > 30 else "")
+            item = QListWidgetItem(f"{s.id} — {preview}")
+            item.setToolTip(s.message)
+            self.sets_list.addItem(item)
 
     def _on_set_selected(self, row: int):
         if row < 0 or row >= len(self._cfg.sets):
@@ -189,6 +192,10 @@ class SettingsWindow(QDialog):
         s = self._cfg.sets[row]
         self._cfg = config_mod.remove_set(self._cfg, s.id)
         self._reload_sets_list()
+        if self._cfg.sets:
+            self.sets_list.setCurrentRow(min(row, len(self._cfg.sets) - 1))
+        else:
+            self._on_set_selected(-1)
 
     def _apply_set_edit(self):
         row = self.sets_list.currentRow()
