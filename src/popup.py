@@ -168,6 +168,9 @@ class Popup(QWidget):
         if self._closed:
             return
         self._closed = True
+        anim = getattr(self, "_anim", None)
+        if anim is not None and anim.state() == QPropertyAnimation.Running:
+            anim.stop()
         try:
             self._on_drank()
         finally:
@@ -177,6 +180,9 @@ class Popup(QWidget):
         if self._closed:
             return
         self._closed = True
+        anim = getattr(self, "_anim", None)
+        if anim is not None and anim.state() == QPropertyAnimation.Running:
+            anim.stop()
         self.close()
 
     def _fade_out(self):
