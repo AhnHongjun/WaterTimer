@@ -1955,7 +1955,7 @@ class _SoundPanel(QWidget):
         self._vol_slider.setMaximum(100)
         self._vol_slider.setValue(sw._cfg.volume)
         self._vol_slider.setStyleSheet(_SLIDER_STYLE)
-        self._vol_slider.setEnabled(sw._cfg.sound_enabled)
+        # 볼륨은 항상 조절 가능. 재생 여부는 sound_enabled가 결정.
         self._vol_slider.valueChanged.connect(self._on_volume_changed)
         vol_lay.addWidget(self._vol_slider, 1)
 
@@ -1997,7 +1997,6 @@ class _SoundPanel(QWidget):
 
     def _on_toggle_enabled(self, on: bool):
         self._sw._apply(sound_enabled=on)
-        self._vol_slider.setEnabled(on)
 
     def _on_volume_changed(self, v: int):
         self._vol_label.setText(str(v))
