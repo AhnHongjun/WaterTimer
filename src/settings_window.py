@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import Qt, QPoint, QSize
+from PySide6.QtCore import Qt, QPoint, QSize, QTime, QByteArray
 from PySide6.QtGui import QColor, QCursor
+from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QDialog, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QScrollArea, QGraphicsDropShadowEffect, QSizePolicy,
+    QSlider, QTimeEdit, QComboBox, QGridLayout,
 )
 
 from src import config as config_mod
@@ -347,6 +349,11 @@ class SettingsWindow(QDialog):
         self._sidebar.set_active(tab_id)
         self._stack.setCurrentWidget(self._tab_widgets[tab_id])
 
+    # ---------- 탭 빌더 (하단 헬퍼 함수로 위임) ----------
+
+    def _build_notify_tab(self) -> QWidget:
+        return _build_notify_tab_for(self)
+
     # ---------- 편의: 변경 → 저장 ----------
 
     def _apply(self, **changes) -> None:
@@ -441,3 +448,399 @@ class KVRow(QWidget):
 
     def add_control(self, widget: QWidget) -> None:
         self._slot.addWidget(widget)
+
+
+# ---------- 스타일 공통 ----------
+
+_INPUT_STYLE = f"""
+QAbstractSpinBox, QTimeEdit {{
+    font-family: {tokens.FONT_UI};
+    font-size: 14px;
+    color: {tokens.INK};
+    background-color: {tokens.SURFACE};
+    border: 1.5px solid {tokens.LINE_2};
+    border-radius: 10px;
+    padding: 8px 12px;
+}}
+QAbstractSpinBox:focus, QTimeEdit:focus {{
+    border-color: {tokens.SKY_400};
+}}
+QComboBox {{
+    font-family: {tokens.FONT_UI};
+    font-size: 14px;
+    color: {tokens.INK};
+    background-color: {tokens.SURFACE};
+    border: 1.5px solid {tokens.LINE_2};
+    border-radius: 10px;
+    padding: 8px 12px;
+    padding-right: 28px;
+}}
+QComboBox:focus {{ border-color: {tokens.SKY_400}; }}
+QComboBox::drop-down {{
+    border: none;
+    width: 24px;
+}}
+QComboBox QAbstractItemView {{
+    background: {tokens.SURFACE};
+    border: 1px solid {tokens.LINE_2};
+    border-radius: 10px;
+    selection-background-color: {tokens.SKY_50};
+    selection-color: {tokens.SKY_700};
+    padding: 4px;
+    outline: none;
+}}
+"""
+
+_SLIDER_STYLE = f"""
+QSlider::groove:horizontal {{
+    height: 8px;
+    background: {tokens.SKY_100};
+    border-radius: 4px;
+}}
+QSlider::sub-page:horizontal {{
+    background: {tokens.SKY_400};
+    border-radius: 4px;
+}}
+QSlider::handle:horizontal {{
+    background: {tokens.SKY_500};
+    width: 20px; height: 20px;
+    margin: -6px 0;
+    border-radius: 10px;
+    border: 3px solid {tokens.SURFACE};
+}}
+QSlider::handle:horizontal:hover {{ background: {tokens.SKY_400}; }}
+"""
+
+
+# ---------- Labeled Slider ----------
+
+class _LabeledSlider(QWidget):
+    """가로 슬라이더 + 우측에 현재 값 라벨(Gaegu 700)."""
+
+    def __init__(self, minimum: int, maximum: int, step: int, value: int,
+                 suffix: str, on_change: Callable[[int], None],
+                 width: int = 260, parent=None):
+        super().__init__(parent)
+        self._suffix = suffix
+        self._on_change = on_change
+        self.setFixedWidth(width)
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(tokens.SP)
+
+        self._slider = QSlider(Qt.Horizontal)
+        self._slider.setMinimum(minimum)
+        self._slider.setMaximum(maximum)
+        self._slider.setSingleStep(step)
+        self._slider.setPageStep(step)
+        self._slider.setValue(value)
+        self._slider.setStyleSheet(_SLIDER_STYLE)
+        self._slider.valueChanged.connect(self._handle_change)
+        root.addWidget(self._slider, 1)
+
+        self._label = QLabel(self._fmt(value))
+        self._label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._label.setFixedWidth(64)
+        self._label.setStyleSheet(
+            f"font-family: {tokens.FONT_FUN}; font-size: 16px; font-weight: 700;"
+            f"color: {tokens.SKY_600}; background: transparent;"
+        )
+        root.addWidget(self._label)
+
+    def _fmt(self, v: int) -> str:
+        return f"{v}{self._suffix}"
+
+    def _handle_change(self, v: int):
+        # step 배수로 스냅
+        step = self._slider.singleStep()
+        if step > 1:
+            snapped = round(v / step) * step
+            if snapped != v:
+                self._slider.blockSignals(True)
+                self._slider.setValue(snapped)
+                self._slider.blockSignals(False)
+                v = snapped
+        self._label.setText(self._fmt(v))
+        self._on_change(v)
+
+
+# ---------- Day buttons ----------
+
+class _DayButton(QPushButton):
+    """요일 선택용 34×34 pill 버튼. 선택 상태에 따라 스타일 토글."""
+
+    def __init__(self, label: str, selected: bool,
+                 on_toggle: Callable[[bool], None], parent=None):
+        super().__init__(label, parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(34, 34)
+        self._selected = selected
+        self._on_toggle = on_toggle
+        self._apply_style()
+        self.clicked.connect(self._handle_click)
+
+    def _apply_style(self):
+        if self._selected:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {tokens.SKY_500};
+                    color: #ffffff;
+                    border: 1.5px solid {tokens.SKY_500};
+                    border-radius: 10px;
+                    font-family: {tokens.FONT_UI};
+                    font-size: 13px;
+                    font-weight: 700;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {tokens.SURFACE};
+                    color: {tokens.INK_2};
+                    border: 1.5px solid {tokens.LINE_2};
+                    border-radius: 10px;
+                    font-family: {tokens.FONT_UI};
+                    font-size: 13px;
+                }}
+                QPushButton:hover {{ border-color: {tokens.SKY_300}; }}
+            """)
+
+    def _handle_click(self):
+        self._selected = not self._selected
+        self._apply_style()
+        self._on_toggle(self._selected)
+
+
+# ---------- Position Card ----------
+
+_POSITIONS = [
+    ("top_left",     "왼쪽 위"),
+    ("top_right",    "오른쪽 위"),
+    ("center",       "화면 중앙"),
+    ("bottom_left",  "왼쪽 아래"),
+    ("bottom_right", "오른쪽 아래"),
+]
+
+# 각 위치의 작은 점 좌표 (32×28 박스 기준)
+_POS_DOT = {
+    "top_left":     (3, 3),      # (x, y)
+    "top_right":    (22, 3),
+    "center":       (12, 12),
+    "bottom_left":  (3, 22),
+    "bottom_right": (22, 22),
+}
+
+
+def _position_svg(pos: str, selected: bool) -> str:
+    dot_x, dot_y = _POS_DOT[pos]
+    stroke = "rgba(255,255,255,0.7)" if selected else tokens.LINE_2
+    fill = "#ffffff" if selected else tokens.INK_3
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 28" preserveAspectRatio="xMidYMid meet">
+  <rect x="1" y="1" width="30" height="26" rx="3" fill="none" stroke="{stroke}" stroke-width="1" stroke-dasharray="2 2"/>
+  <rect x="{dot_x}" y="{dot_y}" width="7" height="3" rx="1" fill="{fill}"/>
+</svg>
+"""
+
+
+class _PositionCard(QPushButton):
+    """팝업 위치 선택 카드: SVG 프레임 + 라벨."""
+
+    def __init__(self, position_id: str, label: str, selected: bool,
+                 on_click: Callable[[str], None], parent=None):
+        super().__init__(parent)
+        self._id = position_id
+        self._selected = selected
+        self._on_click = on_click
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(80)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 12, 8, 10)
+        root.setSpacing(6)
+
+        self._svg = QSvgWidget()
+        self._svg.setFixedSize(32, 28)
+        self._svg.setAttribute(Qt.WA_TranslucentBackground)
+        self._update_svg()
+        root.addWidget(self._svg, alignment=Qt.AlignCenter)
+
+        self._label = QLabel(label)
+        self._label.setAlignment(Qt.AlignCenter)
+        root.addWidget(self._label)
+
+        self._apply_style()
+        self.clicked.connect(lambda: self._on_click(self._id))
+
+    def _update_svg(self):
+        self._svg.load(QByteArray(_position_svg(self._id, self._selected).encode("utf-8")))
+
+    def _apply_style(self):
+        if self._selected:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {tokens.SKY_500};
+                    border: 1.5px solid {tokens.SKY_500};
+                    border-radius: 12px;
+                    padding: 0;
+                }}
+                QLabel {{
+                    color: #ffffff;
+                    font-family: {tokens.FONT_UI};
+                    font-size: 12px;
+                    font-weight: 600;
+                    background: transparent;
+                }}
+            """)
+        else:
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {tokens.SURFACE};
+                    border: 1.5px solid {tokens.LINE_2};
+                    border-radius: 12px;
+                    padding: 0;
+                }}
+                QPushButton:hover {{ border-color: {tokens.SKY_300}; }}
+                QLabel {{
+                    color: {tokens.INK_2};
+                    font-family: {tokens.FONT_UI};
+                    font-size: 12px;
+                    background: transparent;
+                }}
+            """)
+
+    def set_selected(self, selected: bool):
+        if selected == self._selected:
+            return
+        self._selected = selected
+        self._update_svg()
+        self._apply_style()
+
+
+# ---------- 알림 탭 ----------
+
+def _build_notify_tab_for(sw: "SettingsWindow") -> QWidget:
+    """SettingsWindow._build_notify_tab에서 호출. sw를 참조해 config 변경 콜백 연결."""
+    root = QWidget()
+    root.setStyleSheet(f"background-color: {tokens.SURFACE};")
+    lay = QVBoxLayout(root)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+
+    # ---- Section: 알림 스케줄 ----
+    sched = Section("알림 스케줄")
+    lay.addWidget(sched)
+
+    # 1) 알림 간격: 슬라이더 15~180 step 5
+    initial_interval = max(15, min(180, sw._cfg.interval_minutes))
+    interval_row = KVRow("알림 간격", hint="얼마마다 알림을 울릴까요?")
+    interval_slider = _LabeledSlider(
+        minimum=15, maximum=180, step=5,
+        value=initial_interval, suffix="분",
+        on_change=lambda v: sw._apply(interval_minutes=v),
+    )
+    interval_row.set_control(interval_slider)
+    sched.add(interval_row)
+
+    # 2) 활성 시간: start ~ end
+    active_row = KVRow("활성 시간", hint="이 시간대에만 알림이 울려요")
+    start_edit = QTimeEdit(QTime.fromString(sw._cfg.active_start, "HH:mm"))
+    start_edit.setDisplayFormat("HH:mm")
+    start_edit.setFixedWidth(110)
+    start_edit.setStyleSheet(_INPUT_STYLE)
+    end_edit = QTimeEdit(QTime.fromString(sw._cfg.active_end, "HH:mm"))
+    end_edit.setDisplayFormat("HH:mm")
+    end_edit.setFixedWidth(110)
+    end_edit.setStyleSheet(_INPUT_STYLE)
+    sep = QLabel("~")
+    sep.setStyleSheet(f"color: {tokens.INK_3}; background: transparent;")
+
+    def _update_active_window():
+        s = start_edit.time().toString("HH:mm")
+        e = end_edit.time().toString("HH:mm")
+        sw._apply(active_start=s, active_end=e)
+
+    start_edit.timeChanged.connect(lambda _: _update_active_window())
+    end_edit.timeChanged.connect(lambda _: _update_active_window())
+    active_row.add_control(start_edit)
+    active_row.add_control(sep)
+    active_row.add_control(end_edit)
+    sched.add(active_row)
+
+    # 3) 자동으로 닫기 (select)
+    close_row = KVRow("자동으로 닫기")
+    close_combo = QComboBox()
+    close_combo.addItem("닫지 않음", 0)
+    close_combo.addItem("10초 뒤", 10)
+    close_combo.addItem("30초 뒤", 30)
+    close_combo.addItem("1분 뒤", 60)
+    close_combo.addItem("5분 뒤", 300)
+    # 현재 값과 가장 가까운 항목 선택
+    current = sw._cfg.auto_close_seconds
+    options = [0, 10, 30, 60, 300]
+    idx = min(range(len(options)), key=lambda i: abs(options[i] - current))
+    close_combo.setCurrentIndex(idx)
+    close_combo.setFixedWidth(160)
+    close_combo.setStyleSheet(_INPUT_STYLE)
+    close_combo.currentIndexChanged.connect(
+        lambda _: sw._apply(auto_close_seconds=int(close_combo.currentData()))
+    )
+    close_row.set_control(close_combo)
+    sched.add(close_row)
+
+    # 4) 요일 — 7 버튼 (월~일)
+    days_row = KVRow("요일")
+    days_container = QWidget()
+    days_container.setStyleSheet("background: transparent;")
+    days_layout = QHBoxLayout(days_container)
+    days_layout.setContentsMargins(0, 0, 0, 0)
+    days_layout.setSpacing(6)
+    day_labels = ["월", "화", "수", "목", "금", "토", "일"]
+    current_days = set(sw._cfg.days)
+    day_buttons: list[_DayButton] = []
+
+    def on_day_toggle(index: int, selected: bool):
+        nonlocal current_days
+        if selected:
+            current_days.add(index)
+        else:
+            current_days.discard(index)
+        sw._apply(days=sorted(current_days))
+
+    for i, lbl in enumerate(day_labels):
+        # bind i via default arg
+        btn = _DayButton(lbl, i in current_days,
+                         on_toggle=lambda s, idx=i: on_day_toggle(idx, s))
+        day_buttons.append(btn)
+        days_layout.addWidget(btn)
+    days_row.set_control(days_container)
+    sched.add(days_row)
+
+    # ---- Section: 팝업 위치 ----
+    pos_section = Section("팝업 위치")
+    lay.addWidget(pos_section)
+
+    grid = QGridLayout()
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setHorizontalSpacing(10)
+    grid.setVerticalSpacing(0)
+
+    pos_cards: list[_PositionCard] = []
+
+    def on_position(chosen: str):
+        for c in pos_cards:
+            c.set_selected(c._id == chosen)
+        sw._apply(popup_position=chosen)
+
+    for col, (pid, plabel) in enumerate(_POSITIONS):
+        card = _PositionCard(pid, plabel,
+                             selected=(sw._cfg.popup_position == pid),
+                             on_click=on_position)
+        pos_cards.append(card)
+        grid.addWidget(card, 0, col)
+
+    pos_section.add_layout(grid)
+
+    lay.addStretch(1)
+    return root
