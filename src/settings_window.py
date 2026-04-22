@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QDialog, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QSpinBox, QTimeEdit, QComboBox, QDialogButtonBox, QMessageBox,
     QListWidget, QListWidgetItem, QLineEdit, QPushButton, QLabel,
-    QFileDialog,
+    QFileDialog, QCheckBox,
 )
 
 from src import config as config_mod
@@ -49,7 +49,7 @@ class SettingsWindow(QDialog):
         # 탭 2~4는 Task 10~12에서 추가
         self.tabs.addTab(self._build_sets_tab(), "이미지 & 메시지")
         self.tabs.addTab(self._build_history_tab(), "기록")
-        self.tabs.addTab(QWidget(), "일반")
+        self.tabs.addTab(self._build_general_tab(), "일반")
 
         btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         btns.accepted.connect(self._save)
@@ -237,20 +237,36 @@ class SettingsWindow(QDialog):
         self._on_reset_count()
         self.count_label.setText("오늘 0번 마셨어요")
 
+    # ---------- 탭: 일반 ----------
+
+    def _build_general_tab(self) -> QWidget:
+        from src import __version__
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.autostart_check = QCheckBox("Windows 시작 시 자동 실행")
+        self.autostart_check.setChecked(self._cfg.autostart)
+        v.addWidget(self.autostart_check)
+        version_label = QLabel(f"Water Timer v{__version__}")
+        version_label.setStyleSheet("color: #777; margin-top: 20px;")
+        v.addWidget(version_label)
+        v.addStretch(1)
+        return w
+
     # ---------- 저장 ----------
 
-    def _collect_notify_changes(self) -> dict:
+    def _collect_changes(self) -> dict:
         return dict(
             interval_minutes=self.interval_spin.value(),
             active_start=self.start_edit.time().toString("HH:mm"),
             active_end=self.end_edit.time().toString("HH:mm"),
             popup_position=self.pos_combo.currentData(),
             auto_close_seconds=self.close_spin.value(),
+            autostart=self.autostart_check.isChecked(),
         )
 
     def _save(self):
         try:
-            new_cfg = config_mod.replace(self._cfg, **self._collect_notify_changes())
+            new_cfg = config_mod.replace(self._cfg, **self._collect_changes())
             config_mod.save(new_cfg)
         except ValueError as e:
             QMessageBox.warning(self, "설정 오류", str(e))
