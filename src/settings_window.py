@@ -644,17 +644,24 @@ def _position_svg(pos: str, selected: bool) -> str:
 """
 
 
-class _PositionCard(QPushButton):
-    """팝업 위치 선택 카드: SVG 프레임 + 라벨."""
+class _PositionCard(QFrame):
+    """팝업 위치 선택 카드: SVG 프레임 + 라벨. QFrame + 마우스 이벤트 직접 처리.
+
+    QPushButton을 쓰면 선택/프레스 상태가 내부 자식(QSvgWidget, QLabel) 위에
+    기본 하이라이트 overlay를 그려 아이콘을 덮어쓰는 문제가 있어 QFrame으로
+    바꿨다.
+    """
 
     def __init__(self, position_id: str, label: str, selected: bool,
                  on_click: Callable[[str], None], parent=None):
         super().__init__(parent)
+        self.setObjectName("positionCard")
         self._id = position_id
         self._selected = selected
         self._on_click = on_click
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedHeight(80)
+        self.setAttribute(Qt.WA_Hover, True)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 12, 8, 10)
@@ -671,7 +678,6 @@ class _PositionCard(QPushButton):
         root.addWidget(self._label)
 
         self._apply_style()
-        self.clicked.connect(lambda: self._on_click(self._id))
 
     def _update_svg(self):
         self._svg.load(QByteArray(_position_svg(self._id, self._selected).encode("utf-8")))
@@ -679,13 +685,12 @@ class _PositionCard(QPushButton):
     def _apply_style(self):
         if self._selected:
             self.setStyleSheet(f"""
-                QPushButton {{
+                QFrame#positionCard {{
                     background-color: {tokens.SKY_500};
                     border: 1.5px solid {tokens.SKY_500};
                     border-radius: 12px;
-                    padding: 0;
                 }}
-                QLabel {{
+                QFrame#positionCard QLabel {{
                     color: #ffffff;
                     font-family: {tokens.FONT_UI};
                     font-size: 12px;
@@ -695,14 +700,15 @@ class _PositionCard(QPushButton):
             """)
         else:
             self.setStyleSheet(f"""
-                QPushButton {{
+                QFrame#positionCard {{
                     background-color: {tokens.SURFACE};
                     border: 1.5px solid {tokens.LINE_2};
                     border-radius: 12px;
-                    padding: 0;
                 }}
-                QPushButton:hover {{ border-color: {tokens.SKY_300}; }}
-                QLabel {{
+                QFrame#positionCard:hover {{
+                    border-color: {tokens.SKY_300};
+                }}
+                QFrame#positionCard QLabel {{
                     color: {tokens.INK_2};
                     font-family: {tokens.FONT_UI};
                     font-size: 12px;
@@ -716,6 +722,11 @@ class _PositionCard(QPushButton):
         self._selected = selected
         self._update_svg()
         self._apply_style()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self._on_click(self._id)
+        super().mouseReleaseEvent(event)
 
 
 # ---------- 알림 탭 ----------
