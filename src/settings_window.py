@@ -1414,7 +1414,7 @@ class _CharacterCard(QFrame):
             self.setStyleSheet(f"""
                 QFrame#charCard {{
                     background: transparent;
-                    border: 2px solid transparent;
+                    border: 1.5px solid {tokens.LINE_2};
                     border-radius: 16px;
                 }}
                 QFrame#charCard:hover {{
