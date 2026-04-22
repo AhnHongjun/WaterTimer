@@ -148,7 +148,19 @@ class Application:
 
 
 def main():
-    sys.exit(Application().run())
+    from src.single_instance import SingleInstanceGuard, AlreadyRunning
+    try:
+        with SingleInstanceGuard():
+            sys.exit(Application().run())
+    except AlreadyRunning:
+        # 조용히 종료. Qt 메시지 박스를 띄우려면 QApplication이 필요해서
+        # 간단히 Windows MessageBox를 직접 호출.
+        if sys.platform == "win32":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0, "Water Timer가 이미 실행 중입니다.", "Water Timer", 0x40
+            )
+        sys.exit(0)
 
 
 if __name__ == "__main__":
