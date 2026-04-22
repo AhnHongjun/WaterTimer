@@ -121,7 +121,6 @@ class Application:
     def _reset_count(self):
         from dataclasses import replace
         self.state = replace(self.state, count=0)
-        from src import state as state_mod
         state_mod.save(self.state)
         self.tray.set_count(0)
 
