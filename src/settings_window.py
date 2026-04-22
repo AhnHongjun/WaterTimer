@@ -1,280 +1,443 @@
-"""설정 창 QDialog — 4개 탭.
+"""설정 창 (v2): 860×600 + 커스텀 타이틀바 + 200px 사이드바 + 5탭 스택.
 
-탭 추가는 같은 파일 안에 _build_*_tab() 메서드로. 탭이 많아지면 분리를 고려.
+탭 구성 (디자인 순서):
+  🔔 알림   📊 기록(default)   🎨 커스터마이즈   🔊 사운드   ⚙️ 시작·트레이
+
+Save/Cancel 버튼 없음 — 모든 변경은 즉시 config.save() + on_save() 콜백으로 반영.
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
-from PySide6.QtCore import Qt, QTime
+from PySide6.QtCore import Qt, QPoint, QSize
+from PySide6.QtGui import QColor, QCursor
 from PySide6.QtWidgets import (
-    QDialog, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QSpinBox, QTimeEdit, QComboBox, QDialogButtonBox, QMessageBox,
-    QListWidget, QListWidgetItem, QLineEdit, QPushButton, QLabel,
-    QFileDialog, QCheckBox,
+    QDialog, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QStackedWidget, QScrollArea, QGraphicsDropShadowEffect, QSizePolicy,
 )
 
 from src import config as config_mod
+from src import tokens
+from src.widgets.droplet import Droplet
 
 
-POSITION_LABELS = {
-    "bottom_right": "오른쪽 아래",
-    "bottom_left":  "왼쪽 아래",
-    "top_right":    "오른쪽 위",
-    "top_left":     "왼쪽 위",
-    "center":       "중앙",
-}
+TABS = [
+    ("notify",  "🔔", "알림"),
+    ("history", "📊", "기록"),
+    ("custom",  "🎨", "커스터마이즈"),
+    ("sound",   "🔊", "사운드"),
+    ("system",  "⚙️", "시작·트레이"),
+]
+DEFAULT_TAB = "history"
 
+
+# ---------- TitleBar ----------
+
+class _TitleBar(QFrame):
+    """프레임리스 창의 36px 커스텀 타이틀바. 드래그로 창 이동."""
+
+    def __init__(self, parent_dialog: QDialog):
+        super().__init__(parent_dialog)
+        self._parent_dialog = parent_dialog
+        self._drag_origin: Optional[QPoint] = None
+        self.setObjectName("titlebar")
+        self.setFixedHeight(tokens.TITLEBAR_H)
+        self.setStyleSheet(f"""
+            #titlebar {{
+                background-color: {tokens.SURFACE_2};
+                border-bottom: 1px solid {tokens.LINE};
+                border-top-left-radius: 16px;
+                border-top-right-radius: 16px;
+            }}
+        """)
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(14, 0, 0, 0)
+        root.setSpacing(8)
+
+        # 좌측: 물방울 아이콘 + 타이틀
+        icon = Droplet(size=18, show_face=False)
+        icon.setFixedSize(18, 20)
+        root.addWidget(icon, alignment=Qt.AlignVCenter)
+
+        title = QLabel("Water Timer — 설정")
+        title.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 12px; color: {tokens.INK_2}; background: transparent;"
+        )
+        root.addWidget(title)
+        root.addStretch(1)
+
+        # 우측: –  ▢  ✕ (44×36)
+        self._min_btn = self._mk_window_btn("–", self._on_minimize)
+        self._max_btn = self._mk_window_btn("▢", lambda: None)   # QDialog 최대화 비활성 (시각 placeholder)
+        self._max_btn.setEnabled(False)
+        self._close_btn = self._mk_window_btn("✕", parent_dialog.accept)
+        root.addWidget(self._min_btn)
+        root.addWidget(self._max_btn)
+        root.addWidget(self._close_btn)
+
+    def _mk_window_btn(self, label: str, callback) -> QPushButton:
+        btn = QPushButton(label)
+        btn.setFixedSize(44, tokens.TITLEBAR_H)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                color: {tokens.INK_2};
+                font-size: 11px;
+            }}
+            QPushButton:hover {{ background-color: {tokens.SKY_50}; color: {tokens.SKY_700}; }}
+            QPushButton:disabled {{ color: {tokens.INK_3}; }}
+        """)
+        btn.clicked.connect(callback)
+        return btn
+
+    def _on_minimize(self):
+        # QDialog에는 showMinimized()가 있지만 플랫폼에 따라 비활성화될 수 있음.
+        # 트레이에 있는 앱이므로 그냥 close로도 충분하나, 디자인에 – 버튼이 있으니 지원.
+        self._parent_dialog.showMinimized()
+
+    # ---------- 창 드래그 ----------
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_origin = event.globalPosition().toPoint() - self._parent_dialog.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_origin is not None and event.buttons() & Qt.LeftButton:
+            self._parent_dialog.move(event.globalPosition().toPoint() - self._drag_origin)
+            event.accept()
+
+    def mouseReleaseEvent(self, event):
+        self._drag_origin = None
+        event.accept()
+
+
+# ---------- Sidebar ----------
+
+class _TabButton(QPushButton):
+    """사이드바 탭 버튼. 선택 여부에 따라 스타일 토글."""
+
+    def __init__(self, icon: str, label: str, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setAutoExclusive(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(40)
+        self._icon = icon
+        self._label = label
+        self.setText(f"  {icon}    {label}")   # 간단한 간격 조정 (실제 아이콘은 QLabel로 분리해도 되나 단순화)
+        self.setStyleSheet(f"""
+            QPushButton {{
+                text-align: left;
+                padding: 11px 14px;
+                border-radius: 12px;
+                border: 1px solid transparent;
+                font-family: {tokens.FONT_UI};
+                font-size: 14px;
+                color: {tokens.INK_2};
+                background: transparent;
+            }}
+            QPushButton:hover {{
+                background-color: {tokens.SKY_50};
+                color: {tokens.SKY_700};
+            }}
+            QPushButton:checked {{
+                background-color: {tokens.SURFACE};
+                border: 1px solid {tokens.SKY_100};
+                color: {tokens.SKY_700};
+                font-weight: 600;
+            }}
+        """)
+
+
+class _Sidebar(QFrame):
+    """200px 사이드바: 5개 탭 버튼 + 하단 버전 라벨."""
+
+    def __init__(self, on_tab_change: Callable[[str], None], parent=None):
+        super().__init__(parent)
+        self._on_tab_change = on_tab_change
+        self.setFixedWidth(tokens.SIDEBAR_W)
+        self.setStyleSheet(f"""
+            _Sidebar {{
+                background-color: {tokens.SURFACE};
+                border-right: 1px solid {tokens.LINE};
+            }}
+        """)
+        # QSS의 attribute selector로 직접 지정하는 대신 objectName 기반
+        self.setObjectName("sidebar")
+        self.setStyleSheet(f"""
+            #sidebar {{
+                background-color: {tokens.SURFACE};
+                border-right: 1px solid {tokens.LINE};
+            }}
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 22, 14, 14)
+        root.setSpacing(4)
+
+        self._buttons: dict[str, _TabButton] = {}
+        for tab_id, icon, label in TABS:
+            btn = _TabButton(icon, label, self)
+            btn.clicked.connect(lambda _checked=False, tid=tab_id: self._on_tab_change(tid))
+            self._buttons[tab_id] = btn
+            root.addWidget(btn)
+
+        root.addStretch(1)
+
+        # 버전 라벨 (mono, ink-3)
+        from src import __version__
+        version = QLabel(f"v{__version__} · Water Timer")
+        version.setStyleSheet(
+            f"font-family: {tokens.FONT_MONO}; font-size: 11px; color: {tokens.INK_3};"
+            f"padding-left: 14px; background: transparent;"
+        )
+        root.addWidget(version)
+
+    def set_active(self, tab_id: str) -> None:
+        for tid, btn in self._buttons.items():
+            btn.setChecked(tid == tab_id)
+
+
+# ---------- 탭 placeholder (Task 33~37에서 구현) ----------
+
+class _EmptyTab(QWidget):
+    """아직 구현 전인 탭에 띄울 placeholder."""
+
+    def __init__(self, label: str, parent=None):
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        hint = QLabel(f"'{label}' 탭은 곧 추가됩니다.")
+        hint.setAlignment(Qt.AlignCenter)
+        hint.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 14px; color: {tokens.INK_3};"
+        )
+        root.addStretch(1)
+        root.addWidget(hint)
+        root.addStretch(1)
+
+
+# ---------- SettingsWindow ----------
 
 class SettingsWindow(QDialog):
+    """프레임리스 설정 창. 860×600. Save/Cancel 없음 — 모든 변경은 즉시 반영."""
+
     def __init__(self,
                  cfg: config_mod.Config,
                  current_count: int,
                  on_save: Callable[[config_mod.Config], None],
                  on_reset_count: Callable[[], None],
-                 parent=None,
-                 history=None,        # v2 신규 인자 (Task 32에서 본격 사용)
-                 on_add_cup=None):    # v2 신규 인자
+                 history: Optional[list] = None,
+                 on_add_cup: Optional[Callable[[], None]] = None,
+                 parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Water Timer 설정")
-        self.resize(520, 420)
         self._cfg = cfg
         self._current_count = current_count
+        self._history = history or []
         self._on_save = on_save
         self._on_reset_count = on_reset_count
-        self._history = history or []
         self._on_add_cup = on_add_cup or (lambda: None)
 
-        layout = QVBoxLayout(self)
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
+        # 프레임리스 + 투명 배경 (라운드 코너용)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(tokens.SETTINGS_W + 20, tokens.SETTINGS_H + 20)   # +20: 그림자 여유
 
-        self.tabs.addTab(self._build_notify_tab(), "알림")
-        # 탭 2~4는 Task 10~12에서 추가
-        self.tabs.addTab(self._build_sets_tab(), "이미지 & 메시지")
-        self.tabs.addTab(self._build_history_tab(), "기록")
-        self.tabs.addTab(self._build_general_tab(), "일반")
+        self._build_ui()
+        self._activate_tab(DEFAULT_TAB)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self._save)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+    # ---------- 구조 ----------
 
-    # ---------- 탭: 알림 ----------
+    def _build_ui(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
 
-    def _build_notify_tab(self) -> QWidget:
-        w = QWidget()
-        form = QFormLayout(w)
+        # 흰색 메인 컨테이너 (라운드 + 그림자)
+        container = QFrame(self)
+        container.setObjectName("settingsContainer")
+        container.setStyleSheet(f"""
+            #settingsContainer {{
+                background-color: {tokens.SURFACE};
+                border-radius: 16px;
+            }}
+        """)
+        shadow = QGraphicsDropShadowEffect(container)
+        shadow.setBlurRadius(tokens.SHADOW_LG[0])
+        shadow.setOffset(tokens.SHADOW_LG[1], tokens.SHADOW_LG[2])
+        r, g, b, a = tokens.SHADOW_LG[3]
+        shadow.setColor(QColor(r, g, b, a))
+        container.setGraphicsEffect(shadow)
+        outer.addWidget(container)
 
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(config_mod.MIN_INTERVAL, config_mod.MAX_INTERVAL)
-        self.interval_spin.setSuffix(" 분")
-        self.interval_spin.setValue(self._cfg.interval_minutes)
-        form.addRow("알림 간격", self.interval_spin)
+        container_v = QVBoxLayout(container)
+        container_v.setContentsMargins(0, 0, 0, 0)
+        container_v.setSpacing(0)
 
-        self.start_edit = QTimeEdit(QTime.fromString(self._cfg.active_start, "HH:mm"))
-        self.start_edit.setDisplayFormat("HH:mm")
-        form.addRow("활성 시간 시작", self.start_edit)
+        # 타이틀바
+        self._titlebar = _TitleBar(self)
+        container_v.addWidget(self._titlebar)
 
-        self.end_edit = QTimeEdit(QTime.fromString(self._cfg.active_end, "HH:mm"))
-        self.end_edit.setDisplayFormat("HH:mm")
-        form.addRow("활성 시간 종료", self.end_edit)
+        # 본문: 사이드바 + 컨텐츠
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        container_v.addLayout(body)
 
-        self.pos_combo = QComboBox()
-        for key, label in POSITION_LABELS.items():
-            self.pos_combo.addItem(label, key)
-        self.pos_combo.setCurrentIndex(
-            list(POSITION_LABELS.keys()).index(self._cfg.popup_position)
-        )
-        form.addRow("팝업 위치", self.pos_combo)
+        self._sidebar = _Sidebar(self._activate_tab, self)
+        body.addWidget(self._sidebar)
 
-        self.close_spin = QSpinBox()
-        self.close_spin.setRange(config_mod.MIN_AUTO_CLOSE, config_mod.MAX_AUTO_CLOSE)
-        self.close_spin.setSuffix(" 초")
-        self.close_spin.setValue(self._cfg.auto_close_seconds)
-        form.addRow("자동 닫힘", self.close_spin)
+        # 컨텐츠: 스크롤 가능 + 패딩
+        self._stack = QStackedWidget(self)
+        self._stack.setStyleSheet(f"background-color: {tokens.SURFACE};")
 
-        return w
+        # 각 탭을 스크롤뷰 안에 넣어 등록
+        self._tab_widgets = {}
+        for tab_id, _icon, label in TABS:
+            tab_widget = self._build_tab(tab_id, label)
+            scroll = QScrollArea()
+            scroll.setWidget(tab_widget)
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QScrollArea.NoFrame)
+            scroll.setStyleSheet(f"""
+                QScrollArea {{ background-color: {tokens.SURFACE}; border: none; }}
+                QScrollBar:vertical {{
+                    background: transparent;
+                    width: 10px;
+                    margin: 4px 2px 4px 0;
+                }}
+                QScrollBar::handle:vertical {{
+                    background: {tokens.LINE_2};
+                    border-radius: 4px;
+                    min-height: 30px;
+                }}
+                QScrollBar::handle:vertical:hover {{ background: {tokens.SKY_300}; }}
+                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+                QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+            """)
+            self._tab_widgets[tab_id] = scroll
+            self._stack.addWidget(scroll)
 
-    # ---------- 탭: 이미지 & 메시지 ----------
+        body.addWidget(self._stack, 1)
 
-    def _build_sets_tab(self) -> QWidget:
-        w = QWidget()
-        h = QHBoxLayout(w)
-
-        # 좌측: 목록 + 추가/삭제
-        left = QVBoxLayout()
-        self.sets_list = QListWidget()
-        self._reload_sets_list()
-        self.sets_list.currentRowChanged.connect(self._on_set_selected)
-        left.addWidget(self.sets_list)
-        btn_row = QHBoxLayout()
-        add_btn = QPushButton("추가")
-        add_btn.clicked.connect(self._add_set)
-        rm_btn = QPushButton("삭제")
-        rm_btn.clicked.connect(self._remove_set)
-        btn_row.addWidget(add_btn)
-        btn_row.addWidget(rm_btn)
-        left.addLayout(btn_row)
-        h.addLayout(left, 1)
-
-        # 우측: 편집 폼
-        right = QVBoxLayout()
-        form = QFormLayout()
-        self.img_edit = QLineEdit()
-        self.img_edit.setPlaceholderText("이미지 파일 경로")
-        browse = QPushButton("찾아보기…")
-        browse.clicked.connect(self._browse_image)
-        img_row = QHBoxLayout()
-        img_row.addWidget(self.img_edit, 1)
-        img_row.addWidget(browse)
-        form.addRow("이미지", self._wrap(img_row))
-        self.msg_edit = QLineEdit()
-        self.msg_edit.setPlaceholderText("표시할 메시지")
-        form.addRow("메시지", self.msg_edit)
-        self.img_status = QLabel("")
-        self.img_status.setStyleSheet("color: #c62828;")
-        form.addRow("", self.img_status)
-        right.addLayout(form)
-        apply_btn = QPushButton("이 세트 수정 적용")
-        apply_btn.clicked.connect(self._apply_set_edit)
-        right.addWidget(apply_btn, 0)
-        right.addStretch(1)
-        h.addLayout(right, 2)
-
-        return w
-
-    def _wrap(self, layout) -> QWidget:
+    def _build_tab(self, tab_id: str, label: str) -> QWidget:
+        """각 탭의 본체. Task 33~37에서 _build_notify_tab 등으로 교체됨."""
+        builder = getattr(self, f"_build_{tab_id}_tab", None)
+        if builder is None:
+            return _EmptyTab(label)
+        w = builder()
+        # 외곽 패딩 (28px 36px)
         wrapper = QWidget()
-        wrapper.setLayout(layout)
+        wrapper.setStyleSheet(f"background-color: {tokens.SURFACE};")
+        lay = QVBoxLayout(wrapper)
+        lay.setContentsMargins(36, 28, 36, 28)
+        lay.setSpacing(0)
+        lay.addWidget(w)
+        lay.addStretch(1)
         return wrapper
 
-    def _reload_sets_list(self):
-        self.sets_list.clear()
-        for s in self._cfg.sets:
-            preview = s.message[:30] + ("…" if len(s.message) > 30 else "")
-            item = QListWidgetItem(f"{s.id} — {preview}")
-            item.setToolTip(s.message)
-            self.sets_list.addItem(item)
+    # ---------- 탭 전환 ----------
 
-    def _on_set_selected(self, row: int):
-        if row < 0 or row >= len(self._cfg.sets):
-            self.img_edit.setText("")
-            self.msg_edit.setText("")
-            self.img_status.setText("")
+    def _activate_tab(self, tab_id: str) -> None:
+        if tab_id not in self._tab_widgets:
             return
-        s = self._cfg.sets[row]
-        self.img_edit.setText(s.image_path)
-        self.msg_edit.setText(s.message)
-        self._update_img_status(s.image_path)
+        self._sidebar.set_active(tab_id)
+        self._stack.setCurrentWidget(self._tab_widgets[tab_id])
 
-    def _update_img_status(self, path_str: str):
-        from src.popup import resolve_image_path
-        from pathlib import Path as _P
-        p = resolve_image_path(path_str) if path_str else _P("")
-        if not path_str:
-            self.img_status.setText("")
-        elif path_str.startswith("<bundled>/") or p.exists():
-            self.img_status.setText("")
-        else:
-            self.img_status.setText(f"경고: 이미지 파일을 찾을 수 없습니다 ({path_str})")
+    # ---------- 편의: 변경 → 저장 ----------
 
-    def _browse_image(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "이미지 선택", "",
-            "이미지 (*.png *.jpg *.jpeg *.gif *.bmp *.webp)"
-        )
-        if path:
-            self.img_edit.setText(path)
-            self._update_img_status(path)
+    def _apply(self, **changes) -> None:
+        """config에 변경사항을 합성해 즉시 디스크에 저장하고 콜백 호출.
 
-    def _add_set(self):
-        new = config_mod.Set(id=config_mod.new_set_id(),
-                             image_path="", message="새 메시지")
-        self._cfg = config_mod.add_set(self._cfg, new)
-        self._reload_sets_list()
-        self.sets_list.setCurrentRow(len(self._cfg.sets) - 1)
-
-    def _remove_set(self):
-        row = self.sets_list.currentRow()
-        if row < 0 or row >= len(self._cfg.sets):
-            return
-        s = self._cfg.sets[row]
-        self._cfg = config_mod.remove_set(self._cfg, s.id)
-        self._reload_sets_list()
-        if self._cfg.sets:
-            self.sets_list.setCurrentRow(min(row, len(self._cfg.sets) - 1))
-        else:
-            self._on_set_selected(-1)
-
-    def _apply_set_edit(self):
-        row = self.sets_list.currentRow()
-        if row < 0 or row >= len(self._cfg.sets):
-            return
-        s = self._cfg.sets[row]
-        self._cfg = config_mod.update_set(
-            self._cfg, s.id,
-            image_path=self.img_edit.text().strip(),
-            message=self.msg_edit.text().strip(),
-        )
-        self._reload_sets_list()
-        self.sets_list.setCurrentRow(row)
-
-    # ---------- 탭: 기록 ----------
-
-    def _build_history_tab(self) -> QWidget:
-        w = QWidget()
-        v = QVBoxLayout(w)
-        self.count_label = QLabel(f"오늘 {self._current_count}번 마셨어요")
-        self.count_label.setStyleSheet("font-size: 16pt; padding: 20px;")
-        v.addWidget(self.count_label)
-        reset_btn = QPushButton("오늘 횟수 초기화")
-        reset_btn.clicked.connect(self._reset_count)
-        v.addWidget(reset_btn, 0)
-        v.addStretch(1)
-        return w
-
-    def _reset_count(self):
-        if QMessageBox.question(self, "확인",
-                                "오늘 카운터를 0으로 초기화할까요?") != QMessageBox.Yes:
-            return
-        self._on_reset_count()
-        self.count_label.setText("오늘 0번 마셨어요")
-
-    # ---------- 탭: 일반 ----------
-
-    def _build_general_tab(self) -> QWidget:
-        from src import __version__
-        w = QWidget()
-        v = QVBoxLayout(w)
-        self.autostart_check = QCheckBox("Windows 시작 시 자동 실행")
-        self.autostart_check.setChecked(self._cfg.autostart)
-        v.addWidget(self.autostart_check)
-        version_label = QLabel(f"Water Timer v{__version__}")
-        version_label.setStyleSheet("color: #777; margin-top: 20px;")
-        v.addWidget(version_label)
-        v.addStretch(1)
-        return w
-
-    # ---------- 저장 ----------
-
-    def _collect_changes(self) -> dict:
-        return dict(
-            interval_minutes=self.interval_spin.value(),
-            active_start=self.start_edit.time().toString("HH:mm"),
-            active_end=self.end_edit.time().toString("HH:mm"),
-            popup_position=self.pos_combo.currentData(),
-            auto_close_seconds=self.close_spin.value(),
-            autostart=self.autostart_check.isChecked(),
-        )
-
-    def _save(self):
+        유효성 에러 시엔 기존 상태 유지 (사용자에게 메시지 없이 무시).
+        개별 탭이 유효성 책임을 지도록 기대.
+        """
         try:
-            new_cfg = config_mod.replace(self._cfg, **self._collect_changes())
+            new_cfg = config_mod.replace(self._cfg, **changes)
             config_mod.save(new_cfg)
-        except ValueError as e:
-            QMessageBox.warning(self, "설정 오류", str(e))
+        except ValueError:
             return
         self._cfg = new_cfg
         self._on_save(new_cfg)
-        self.accept()
+
+
+# ---------- 디자인 공통 헬퍼 (탭 구현용 import 재사용) ----------
+
+class Section(QWidget):
+    """제목(+선택적 힌트) + 아래 내용 영역. 탭 내부에서 반복 사용."""
+
+    def __init__(self, title: str, hint: Optional[str] = None, parent=None):
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, tokens.SP_3XL)
+        root.setSpacing(0)
+        t = QLabel(title)
+        t.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 18px; font-weight: 600; color: {tokens.INK};"
+            f"background: transparent;"
+        )
+        root.addWidget(t)
+        if hint:
+            h = QLabel(hint)
+            h.setStyleSheet(
+                f"font-family: {tokens.FONT_UI}; font-size: 12px; color: {tokens.INK_3};"
+                f"background: transparent; margin-top: 2px;"
+            )
+            root.addWidget(h)
+            root.addSpacing(tokens.SP_MD)
+        else:
+            root.addSpacing(tokens.SP_MD)
+        self._body = QWidget()
+        self._body_layout = QVBoxLayout(self._body)
+        self._body_layout.setContentsMargins(0, 0, 0, 0)
+        self._body_layout.setSpacing(0)
+        root.addWidget(self._body)
+
+    def add(self, widget: QWidget) -> None:
+        self._body_layout.addWidget(widget)
+
+    def add_layout(self, layout) -> None:
+        self._body_layout.addLayout(layout)
+
+
+class KVRow(QWidget):
+    """key-value 한 줄. 좌측 라벨(+힌트), 우측 컨트롤. 하단 1px 구분선."""
+
+    def __init__(self, label: str, hint: Optional[str] = None, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"background: transparent; border-bottom: 1px solid {tokens.LINE};")
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, tokens.SP_MD, 0, tokens.SP_MD)
+        root.setSpacing(tokens.SP_XL)
+
+        left = QVBoxLayout()
+        left.setSpacing(0)
+        left.setContentsMargins(0, 0, 0, 0)
+        l = QLabel(label)
+        l.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 14px; color: {tokens.INK};"
+            f"background: transparent;"
+        )
+        left.addWidget(l)
+        if hint:
+            h = QLabel(hint)
+            h.setStyleSheet(
+                f"font-family: {tokens.FONT_UI}; font-size: 12px; color: {tokens.INK_3};"
+                f"background: transparent; margin-top: 2px;"
+            )
+            left.addWidget(h)
+        root.addLayout(left, 1)
+
+        self._slot = QHBoxLayout()
+        self._slot.setContentsMargins(0, 0, 0, 0)
+        self._slot.setSpacing(tokens.SP_SM)
+        root.addLayout(self._slot, 0)
+
+    def set_control(self, widget: QWidget) -> None:
+        self._slot.addWidget(widget)
+
+    def add_control(self, widget: QWidget) -> None:
+        self._slot.addWidget(widget)
