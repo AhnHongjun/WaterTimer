@@ -65,6 +65,7 @@ class Application:
         reloaded = state_mod.load()
         if reloaded.date != self.state.date:
             self.state = reloaded
+            self.last_set_id = None
             self.tray.set_count(self.state.count)
 
         now = datetime.now()
