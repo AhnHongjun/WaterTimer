@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import Qt, QPoint, QSize, QTime, QByteArray
-from PySide6.QtGui import QColor, QCursor
-from PySide6.QtSvgWidgets import QSvgWidget
+from PySide6.QtCore import Qt, QPoint, QSize, QTime, QByteArray, QRect, QRectF
+from PySide6.QtGui import QColor, QCursor, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (
     QDialog, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QScrollArea, QGraphicsDropShadowEffect, QSizePolicy,
-    QSlider, QTimeEdit, QComboBox, QGridLayout,
+    QSlider, QTimeEdit, QComboBox, QGridLayout, QAbstractSpinBox,
+    QStyle, QStyleOptionSpinBox,
 )
 
 from src import config as config_mod
@@ -461,9 +461,38 @@ QAbstractSpinBox, QTimeEdit {{
     border: 1.5px solid {tokens.LINE_2};
     border-radius: 10px;
     padding: 8px 12px;
+    padding-right: 28px;
 }}
 QAbstractSpinBox:focus, QTimeEdit:focus {{
     border-color: {tokens.SKY_400};
+}}
+QAbstractSpinBox::up-button, QTimeEdit::up-button,
+QAbstractSpinBox::down-button, QTimeEdit::down-button {{
+    subcontrol-origin: border;
+    width: 22px;
+    background: transparent;
+    border: none;
+}}
+QAbstractSpinBox::up-button, QTimeEdit::up-button {{
+    subcontrol-position: top right;
+    margin-top: 2px;
+    margin-right: 2px;
+}}
+QAbstractSpinBox::down-button, QTimeEdit::down-button {{
+    subcontrol-position: bottom right;
+    margin-bottom: 2px;
+    margin-right: 2px;
+}}
+QAbstractSpinBox::up-button:hover, QTimeEdit::up-button:hover,
+QAbstractSpinBox::down-button:hover, QTimeEdit::down-button:hover {{
+    background: {tokens.SKY_50};
+    border-radius: 6px;
+}}
+/* 기본 화살표(::up-arrow/::down-arrow)는 paintEvent에서 오버라이드해 그림 */
+QAbstractSpinBox::up-arrow, QAbstractSpinBox::down-arrow,
+QTimeEdit::up-arrow, QTimeEdit::down-arrow {{
+    width: 0; height: 0;
+    image: none;
 }}
 QComboBox {{
     font-family: {tokens.FONT_UI};
@@ -510,6 +539,52 @@ QSlider::handle:horizontal {{
 }}
 QSlider::handle:horizontal:hover {{ background: {tokens.SKY_400}; }}
 """
+
+
+# ---------- Themed QTimeEdit (커스텀 화살표) ----------
+
+class _ThemedTimeEdit(QTimeEdit):
+    """QTimeEdit 위에 sky 톤 up/down 삼각형 화살표를 그려 기본 화살표를 가린다.
+
+    QSS로 기본 ::up-arrow/::down-arrow를 숨기고, paintEvent에서 QStyle 서브컨트롤
+    rect를 얻어 그 안에 삼각형을 그린다. 버튼 클릭 동작(stepUp/stepDown)은 Qt가
+    자동 처리하므로 여기선 그림만 그리면 됨.
+    """
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        opt = QStyleOptionSpinBox()
+        self.initStyleOption(opt)
+        style = self.style()
+        up_rect = style.subControlRect(QStyle.CC_SpinBox, opt,
+                                       QStyle.SC_SpinBoxUp, self)
+        down_rect = style.subControlRect(QStyle.CC_SpinBox, opt,
+                                         QStyle.SC_SpinBoxDown, self)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(QColor(tokens.SKY_500)))
+
+        # 위 삼각형: 중앙점 위쪽을 꼭짓점으로
+        cx = up_rect.center().x()
+        cy = up_rect.center().y()
+        up_pts = [
+            QPoint(cx - 4, cy + 2),
+            QPoint(cx + 4, cy + 2),
+            QPoint(cx, cy - 3),
+        ]
+        painter.drawPolygon(up_pts)
+
+        # 아래 삼각형: 중앙점 아래쪽을 꼭짓점으로
+        cx = down_rect.center().x()
+        cy = down_rect.center().y()
+        down_pts = [
+            QPoint(cx - 4, cy - 2),
+            QPoint(cx + 4, cy - 2),
+            QPoint(cx, cy + 3),
+        ]
+        painter.drawPolygon(down_pts)
 
 
 # ---------- Labeled Slider ----------
@@ -632,25 +707,54 @@ _POS_DOT = {
 }
 
 
-def _position_svg(pos: str, selected: bool) -> str:
-    dot_x, dot_y = _POS_DOT[pos]
-    stroke = "rgba(255,255,255,0.7)" if selected else tokens.LINE_2
-    fill = "#ffffff" if selected else tokens.INK_3
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 28" preserveAspectRatio="xMidYMid meet">
-  <rect x="1" y="1" width="30" height="26" rx="3" fill="none" stroke="{stroke}" stroke-width="1" stroke-dasharray="2 2"/>
-  <rect x="{dot_x}" y="{dot_y}" width="7" height="3" rx="1" fill="{fill}"/>
-</svg>
-"""
+class _PositionIcon(QWidget):
+    """32×28 크기로 '점선 프레임 + 위치 점' 아이콘을 QPainter로 직접 그린다.
+
+    QSvgWidget을 쓰면 불투명 배경이 남아 선택된 카드(파란 bg) 위에 하얀 박스처럼
+    보이는 문제가 있어서 커스텀 위젯으로 교체.
+    """
+
+    def __init__(self, position_id: str, selected: bool, parent=None):
+        super().__init__(parent)
+        self._id = position_id
+        self._selected = selected
+        self.setFixedSize(32, 28)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def set_state(self, position_id: str, selected: bool):
+        self._id = position_id
+        self._selected = selected
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        if self._selected:
+            stroke_color = QColor(255, 255, 255, int(0.8 * 255))
+            dot_color = QColor("#ffffff")
+        else:
+            stroke_color = QColor(tokens.LINE_2)
+            dot_color = QColor(tokens.INK_3)
+
+        # 점선 프레임 (1,27) → 30×26
+        pen = QPen(stroke_color)
+        pen.setWidthF(1.0)
+        pen.setStyle(Qt.CustomDashLine)
+        pen.setDashPattern([2, 2])
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(QRectF(1, 1, 30, 26), 3, 3)
+
+        # 위치 점 7×3
+        dot_x, dot_y = _POS_DOT[self._id]
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(dot_color))
+        p.drawRoundedRect(QRectF(dot_x, dot_y, 7, 3), 1, 1)
 
 
 class _PositionCard(QFrame):
-    """팝업 위치 선택 카드: SVG 프레임 + 라벨. QFrame + 마우스 이벤트 직접 처리.
-
-    QPushButton을 쓰면 선택/프레스 상태가 내부 자식(QSvgWidget, QLabel) 위에
-    기본 하이라이트 overlay를 그려 아이콘을 덮어쓰는 문제가 있어 QFrame으로
-    바꿨다.
-    """
+    """팝업 위치 선택 카드: 점선 프레임 아이콘 + 라벨. QFrame + 마우스 이벤트."""
 
     def __init__(self, position_id: str, label: str, selected: bool,
                  on_click: Callable[[str], None], parent=None):
@@ -667,20 +771,14 @@ class _PositionCard(QFrame):
         root.setContentsMargins(8, 12, 8, 10)
         root.setSpacing(6)
 
-        self._svg = QSvgWidget()
-        self._svg.setFixedSize(32, 28)
-        self._svg.setAttribute(Qt.WA_TranslucentBackground)
-        self._update_svg()
-        root.addWidget(self._svg, alignment=Qt.AlignCenter)
+        self._icon = _PositionIcon(self._id, self._selected)
+        root.addWidget(self._icon, alignment=Qt.AlignCenter)
 
         self._label = QLabel(label)
         self._label.setAlignment(Qt.AlignCenter)
         root.addWidget(self._label)
 
         self._apply_style()
-
-    def _update_svg(self):
-        self._svg.load(QByteArray(_position_svg(self._id, self._selected).encode("utf-8")))
 
     def _apply_style(self):
         if self._selected:
@@ -720,7 +818,7 @@ class _PositionCard(QFrame):
         if selected == self._selected:
             return
         self._selected = selected
-        self._update_svg()
+        self._icon.set_state(self._id, selected)
         self._apply_style()
 
     def mouseReleaseEvent(self, event):
@@ -756,13 +854,13 @@ def _build_notify_tab_for(sw: "SettingsWindow") -> QWidget:
 
     # 2) 활성 시간: start ~ end
     active_row = KVRow("활성 시간", hint="이 시간대에만 알림이 울려요")
-    start_edit = QTimeEdit(QTime.fromString(sw._cfg.active_start, "HH:mm"))
+    start_edit = _ThemedTimeEdit(QTime.fromString(sw._cfg.active_start, "HH:mm"))
     start_edit.setDisplayFormat("HH:mm")
-    start_edit.setFixedWidth(110)
+    start_edit.setFixedWidth(120)
     start_edit.setStyleSheet(_INPUT_STYLE)
-    end_edit = QTimeEdit(QTime.fromString(sw._cfg.active_end, "HH:mm"))
+    end_edit = _ThemedTimeEdit(QTime.fromString(sw._cfg.active_end, "HH:mm"))
     end_edit.setDisplayFormat("HH:mm")
-    end_edit.setFixedWidth(110)
+    end_edit.setFixedWidth(120)
     end_edit.setStyleSheet(_INPUT_STYLE)
     sep = QLabel("~")
     sep.setStyleSheet(f"color: {tokens.INK_3}; background: transparent;")
