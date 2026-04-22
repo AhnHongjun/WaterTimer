@@ -110,8 +110,20 @@ class Application:
 
     def open_settings(self):
         from src.settings_window import SettingsWindow
-        dlg = SettingsWindow(self.cfg, on_save=self._on_config_saved)
+        dlg = SettingsWindow(
+            cfg=self.cfg,
+            current_count=self.state.count,
+            on_save=self._on_config_saved,
+            on_reset_count=self._reset_count,
+        )
         dlg.exec()
+
+    def _reset_count(self):
+        from dataclasses import replace
+        self.state = replace(self.state, count=0)
+        from src import state as state_mod
+        state_mod.save(self.state)
+        self.tray.set_count(0)
 
     def _on_config_saved(self, new_cfg):
         self.cfg = new_cfg

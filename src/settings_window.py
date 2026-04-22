@@ -27,13 +27,19 @@ POSITION_LABELS = {
 
 
 class SettingsWindow(QDialog):
-    def __init__(self, cfg: config_mod.Config, on_save: Callable[[config_mod.Config], None],
+    def __init__(self,
+                 cfg: config_mod.Config,
+                 current_count: int,
+                 on_save: Callable[[config_mod.Config], None],
+                 on_reset_count: Callable[[], None],
                  parent=None):
         super().__init__(parent)
         self.setWindowTitle("Water Timer 설정")
         self.resize(520, 420)
         self._cfg = cfg
+        self._current_count = current_count
         self._on_save = on_save
+        self._on_reset_count = on_reset_count
 
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -42,7 +48,7 @@ class SettingsWindow(QDialog):
         self.tabs.addTab(self._build_notify_tab(), "알림")
         # 탭 2~4는 Task 10~12에서 추가
         self.tabs.addTab(self._build_sets_tab(), "이미지 & 메시지")
-        self.tabs.addTab(QWidget(), "기록")
+        self.tabs.addTab(self._build_history_tab(), "기록")
         self.tabs.addTab(QWidget(), "일반")
 
         btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -209,6 +215,27 @@ class SettingsWindow(QDialog):
         )
         self._reload_sets_list()
         self.sets_list.setCurrentRow(row)
+
+    # ---------- 탭: 기록 ----------
+
+    def _build_history_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.count_label = QLabel(f"오늘 {self._current_count}번 마셨어요")
+        self.count_label.setStyleSheet("font-size: 16pt; padding: 20px;")
+        v.addWidget(self.count_label)
+        reset_btn = QPushButton("오늘 횟수 초기화")
+        reset_btn.clicked.connect(self._reset_count)
+        v.addWidget(reset_btn, 0)
+        v.addStretch(1)
+        return w
+
+    def _reset_count(self):
+        if QMessageBox.question(self, "확인",
+                                "오늘 카운터를 0으로 초기화할까요?") != QMessageBox.Yes:
+            return
+        self._on_reset_count()
+        self.count_label.setText("오늘 0번 마셨어요")
 
     # ---------- 저장 ----------
 
