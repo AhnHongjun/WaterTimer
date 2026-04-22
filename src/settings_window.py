@@ -1382,18 +1382,11 @@ class _CharacterCard(QFrame):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 16, 10, 10)
-        root.setSpacing(6)
+        root.setSpacing(10)
 
         self._droplet = Droplet(size=tokens.POPUP_DROPLET_SIZE, mood=char_id)
         root.addWidget(self._droplet, alignment=Qt.AlignCenter)
-
-        tag = QLabel("GIF / Lottie")
-        tag.setAlignment(Qt.AlignCenter)
-        tag.setStyleSheet(
-            f"font-family: {tokens.FONT_MONO}; font-size: 9px; color: {tokens.SKY_700};"
-            f"background: transparent; margin-top: 2px;"
-        )
-        root.addWidget(tag)
+        root.addStretch(1)
 
         self._name = QLabel(name)
         self._name.setAlignment(Qt.AlignCenter)
@@ -1405,7 +1398,7 @@ class _CharacterCard(QFrame):
         if self._selected:
             self.setStyleSheet(f"""
                 QFrame#charCard {{
-                    background-color: {tokens.SKY_50};
+                    background: transparent;
                     border: 2px solid {tokens.SKY_500};
                     border-radius: 16px;
                 }}
@@ -1420,12 +1413,13 @@ class _CharacterCard(QFrame):
         else:
             self.setStyleSheet(f"""
                 QFrame#charCard {{
-                    background-color: {tokens.SKY_50};
+                    background: transparent;
                     border: 2px solid transparent;
                     border-radius: 16px;
                 }}
                 QFrame#charCard:hover {{
                     border-color: {tokens.SKY_300};
+                    background: {tokens.SKY_50};
                 }}
                 QFrame#charCard QLabel {{
                     color: {tokens.INK_2};

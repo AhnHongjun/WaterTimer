@@ -1,12 +1,17 @@
-"""물방울 캐릭터 위젯 (QSvgWidget 기반).
+"""물방울 캐릭터 위젯 (QSvgRenderer + QPainter).
 
-`design_ref/droplet.jsx`의 SVG를 문자열로 포맷해서 렌더링한다.
-mood 3종: happy / excited / sleepy.
+`design_ref/droplet.jsx`의 SVG를 QSvgRenderer로 파싱해 QPainter로 직접 그린다.
+QSvgWidget을 쓰면 플랫폼/Qt 버전에 따라 WA_TranslucentBackground가 안 먹혀 흰
+박스가 남는 경우가 있어 커스텀 paintEvent로 교체.
+
+mood: happy / excited / sleepy.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtSvgWidgets import QSvgWidget
+from PySide6.QtCore import QByteArray, Qt, QRectF
+from PySide6.QtGui import QPainter
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtWidgets import QWidget
 
 
 VALID_MOODS = ("happy", "excited", "sleepy")
@@ -34,19 +39,9 @@ _FACE_EXTRAS = """
 
 
 def _build_svg(mood: str, show_face: bool) -> str:
-    if mood == "sleepy":
-        eyes = _EYES_SLEEPY
-    else:
-        eyes = _EYES_AWAKE
-
-    if mood == "excited":
-        mouth = _MOUTH_EXCITED
-    else:
-        mouth = _MOUTH_SMILE
-
-    face = ""
-    if show_face:
-        face = _FACE_EXTRAS + eyes + mouth
+    eyes = _EYES_SLEEPY if mood == "sleepy" else _EYES_AWAKE
+    mouth = _MOUTH_EXCITED if mood == "excited" else _MOUTH_SMILE
+    face = (_FACE_EXTRAS + eyes + mouth) if show_face else ""
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 110" preserveAspectRatio="xMidYMid meet">
@@ -67,13 +62,13 @@ def _build_svg(mood: str, show_face: bool) -> str:
 """
 
 
-class Droplet(QSvgWidget):
-    """물방울 캐릭터. size × size 고정.
+class Droplet(QWidget):
+    """물방울 캐릭터 위젯.
 
     Args:
-        size: 픽셀 크기 (한 변). 높이는 size * 1.1로 내부 viewBox 비율 유지.
+        size: 한 변 픽셀. 높이는 size * 1.1 (viewBox 100×110 비율).
         mood: "happy" | "excited" | "sleepy".
-        show_face: False면 얼굴 없이 물방울 실루엣만.
+        show_face: False면 얼굴 없이 실루엣만.
     """
 
     def __init__(self, size: int = 80, mood: str = "happy",
@@ -84,8 +79,8 @@ class Droplet(QSvgWidget):
         self._mood = mood
         self._show_face = show_face
         self._size = size
-        self.load(QByteArray(_build_svg(mood, show_face).encode("utf-8")))
-        # viewBox가 100×110이므로 높이는 size의 1.1배
+        self._renderer = QSvgRenderer()
+        self._renderer.load(QByteArray(_build_svg(mood, show_face).encode("utf-8")))
         self.setFixedSize(size, int(size * 1.1))
         self.setAttribute(Qt.WA_TranslucentBackground)
 
@@ -93,4 +88,10 @@ class Droplet(QSvgWidget):
         if mood not in VALID_MOODS or mood == self._mood:
             return
         self._mood = mood
-        self.load(QByteArray(_build_svg(mood, self._show_face).encode("utf-8")))
+        self._renderer.load(QByteArray(_build_svg(mood, self._show_face).encode("utf-8")))
+        self.update()
+
+    def paintEvent(self, _):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        self._renderer.render(painter, QRectF(0, 0, self.width(), self.height()))
