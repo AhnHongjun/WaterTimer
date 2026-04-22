@@ -438,13 +438,14 @@ class KVRow(QWidget):
             f"background: transparent;"
         )
         left.addWidget(l)
-        if hint:
-            h = QLabel(hint)
-            h.setStyleSheet(
+        self._hint_label: Optional[QLabel] = None
+        if hint is not None:
+            self._hint_label = QLabel(hint)
+            self._hint_label.setStyleSheet(
                 f"font-family: {tokens.FONT_UI}; font-size: 12px; color: {tokens.INK_3};"
                 f"background: transparent; margin-top: 2px;"
             )
-            left.addWidget(h)
+            left.addWidget(self._hint_label)
         root.addLayout(left, 1)
 
         self._slot = QHBoxLayout()
@@ -457,6 +458,10 @@ class KVRow(QWidget):
 
     def add_control(self, widget: QWidget) -> None:
         self._slot.addWidget(widget)
+
+    def set_hint(self, text: str) -> None:
+        if self._hint_label is not None:
+            self._hint_label.setText(text)
 
 
 # ---------- 스타일 공통 ----------
@@ -2000,7 +2005,7 @@ class _SoundPanel(QWidget):
 
     def _on_volume_changed(self, v: int):
         self._vol_label.setText(str(v))
-        # KVRow의 hint 라벨은 직접 접근하기 복잡하니 생략 (큰 숫자 라벨이 있어 정보 중복)
+        self._vol_hint_row.set_hint(f"{v}%")
         self._sw._apply(volume=int(v))
 
     def _on_sound_selected(self, sound_id: str):
