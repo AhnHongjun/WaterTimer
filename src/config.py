@@ -8,17 +8,28 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
-from dataclasses import dataclass, asdict, replace as dc_replace
+from dataclasses import dataclass, asdict, field, replace as dc_replace
 from typing import List, Optional
 
 from src import paths
 
 
 VALID_POSITIONS = {"bottom_right", "bottom_left", "top_right", "top_left", "center"}
+VALID_CHARACTERS = {"happy", "excited", "sleepy"}
+VALID_SOUNDS = {"drop", "chime", "bubble", "soft", "off"}
+VALID_CLOSE_BEHAVIORS = {"tray", "quit", "ask"}
+
 MIN_INTERVAL = 1
 MAX_INTERVAL = 1440       # 24h
-MIN_AUTO_CLOSE = 3
-MAX_AUTO_CLOSE = 60
+MIN_AUTO_CLOSE = 0        # 0 = "닫지 않음" (v2). 기존 코드와 호환을 위해 하한 완화.
+MAX_AUTO_CLOSE = 600      # 10분까지 허용 (기존 60 → 600으로 확장)
+MIN_GOAL = 1
+MAX_GOAL = 16
+MIN_VOLUME = 0
+MAX_VOLUME = 100
+MIN_SNOOZE = 1
+MAX_SNOOZE = 60
+ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]   # 0 = 월요일
 
 BUNDLED_PREFIX = "<bundled>"  # 런타임에 앱 설치 폴더로 치환
 
@@ -40,13 +51,27 @@ class Set:
 
 @dataclass(frozen=True)
 class Config:
+    # ---- 기존 필드 (v1, 유지) ----
     interval_minutes: int
     active_start: str           # "HH:MM"
     active_end: str             # "HH:MM"
     popup_position: str
     auto_close_seconds: int
     autostart: bool
-    sets: List[Set]
+    sets: List[Set]             # legacy: 이미지+메시지 세트. v2부터는 읽기 전용으로 유지.
+
+    # ---- v2 신규 필드 ----
+    goal: int = 8                               # 하루 목표 잔 수
+    days: List[int] = field(default_factory=lambda: list(ALL_DAYS))  # 알림 요일 (0=월)
+    character_id: str = "happy"                 # 팝업 캐릭터 mood
+    messages: List[str] = field(default_factory=list)                # 알림 메시지 (평면 목록)
+    snooze_minutes: int = 5                     # "5분 뒤" 스누즈 분
+    sound_enabled: bool = False
+    sound_name: str = "drop"
+    volume: int = 60
+    minimize_on_start: bool = False
+    tray_icon: bool = True
+    close_behavior: str = "tray"
 
 
 def _default() -> Config:
@@ -64,6 +89,17 @@ def _default() -> Config:
         auto_close_seconds=12,
         autostart=True,
         sets=sets,
+        goal=8,
+        days=list(ALL_DAYS),
+        character_id="happy",
+        messages=list(DEFAULT_MESSAGES),
+        snooze_minutes=5,
+        sound_enabled=False,
+        sound_name="drop",
+        volume=60,
+        minimize_on_start=False,
+        tray_icon=True,
+        close_behavior="tray",
     )
 
 
@@ -82,6 +118,44 @@ def validate_auto_close(s: int) -> None:
 def validate_position(p: str) -> None:
     if p not in VALID_POSITIONS:
         raise ValueError(f"지원하지 않는 위치: {p}")
+
+
+def validate_character(c: str) -> None:
+    if c not in VALID_CHARACTERS:
+        raise ValueError(f"지원하지 않는 캐릭터: {c}")
+
+
+def validate_sound(name: str) -> None:
+    if name not in VALID_SOUNDS:
+        raise ValueError(f"지원하지 않는 알림음: {name}")
+
+
+def validate_close_behavior(b: str) -> None:
+    if b not in VALID_CLOSE_BEHAVIORS:
+        raise ValueError(f"지원하지 않는 닫기 동작: {b}")
+
+
+def validate_goal(g: int) -> None:
+    if not isinstance(g, int) or g < MIN_GOAL or g > MAX_GOAL:
+        raise ValueError(f"목표는 {MIN_GOAL}~{MAX_GOAL}잔 사이여야 합니다")
+
+
+def validate_volume(v: int) -> None:
+    if not isinstance(v, int) or v < MIN_VOLUME or v > MAX_VOLUME:
+        raise ValueError(f"볼륨은 {MIN_VOLUME}~{MAX_VOLUME} 사이여야 합니다")
+
+
+def validate_snooze(m: int) -> None:
+    if not isinstance(m, int) or m < MIN_SNOOZE or m > MAX_SNOOZE:
+        raise ValueError(f"스누즈는 {MIN_SNOOZE}~{MAX_SNOOZE}분 사이여야 합니다")
+
+
+def validate_days(ds) -> None:
+    if not isinstance(ds, list):
+        raise ValueError("요일 목록은 리스트여야 합니다")
+    for d in ds:
+        if not isinstance(d, int) or d < 0 or d > 6:
+            raise ValueError(f"잘못된 요일: {d} (0~6이어야 함)")
 
 
 def _parse_hhmm(s: str) -> int:
@@ -110,7 +184,17 @@ def _to_dict(c: Config) -> dict:
 
 
 def _from_dict(d: dict) -> Config:
+    """파일에서 읽은 dict → Config.
+
+    누락된 신규 필드는 기본값으로 채움(무손실 마이그레이션).
+    기존 JSON에 messages 필드가 없으면 sets에서 유도.
+    """
+    defaults = _default()
     sets = [Set(**s) for s in d.get("sets", [])]
+    messages = d.get("messages")
+    if messages is None:
+        # v1 → v2 마이그레이션: 기존 세트의 메시지를 평면 목록으로 복사
+        messages = [s.message for s in sets] or list(DEFAULT_MESSAGES)
     return Config(
         interval_minutes=int(d["interval_minutes"]),
         active_start=str(d["active_start"]),
@@ -119,6 +203,17 @@ def _from_dict(d: dict) -> Config:
         auto_close_seconds=int(d["auto_close_seconds"]),
         autostart=bool(d["autostart"]),
         sets=sets,
+        goal=int(d.get("goal", defaults.goal)),
+        days=list(d.get("days", defaults.days)),
+        character_id=str(d.get("character_id", defaults.character_id)),
+        messages=list(messages),
+        snooze_minutes=int(d.get("snooze_minutes", defaults.snooze_minutes)),
+        sound_enabled=bool(d.get("sound_enabled", defaults.sound_enabled)),
+        sound_name=str(d.get("sound_name", defaults.sound_name)),
+        volume=int(d.get("volume", defaults.volume)),
+        minimize_on_start=bool(d.get("minimize_on_start", defaults.minimize_on_start)),
+        tray_icon=bool(d.get("tray_icon", defaults.tray_icon)),
+        close_behavior=str(d.get("close_behavior", defaults.close_behavior)),
     )
 
 
@@ -127,6 +222,13 @@ def _validate(c: Config) -> None:
     validate_auto_close(c.auto_close_seconds)
     validate_position(c.popup_position)
     validate_active_window(c.active_start, c.active_end)
+    validate_goal(c.goal)
+    validate_days(c.days)
+    validate_character(c.character_id)
+    validate_sound(c.sound_name)
+    validate_volume(c.volume)
+    validate_snooze(c.snooze_minutes)
+    validate_close_behavior(c.close_behavior)
 
 
 def load() -> Config:
@@ -139,6 +241,8 @@ def load() -> Config:
         data = json.loads(path.read_text(encoding="utf-8"))
         c = _from_dict(data)
         _validate(c)
+        # 누락 필드를 채워 넣었다면 즉시 디스크에 다시 써서 마이그레이션 완료
+        save(c)
         return c
     except (json.JSONDecodeError, KeyError, ValueError, TypeError):
         shutil.copy2(path, path.with_suffix(".json.bak"))
@@ -185,3 +289,23 @@ def update_set(c: Config, set_id: str, *,
         else:
             new_sets.append(s)
     return dc_replace(c, sets=new_sets)
+
+
+# ---------- 메시지 목록 헬퍼 (v2) ----------
+
+def add_message(c: Config, text: str) -> Config:
+    return dc_replace(c, messages=list(c.messages) + [text])
+
+
+def remove_message(c: Config, index: int) -> Config:
+    new_msgs = list(c.messages)
+    if 0 <= index < len(new_msgs):
+        del new_msgs[index]
+    return dc_replace(c, messages=new_msgs)
+
+
+def update_message(c: Config, index: int, text: str) -> Config:
+    new_msgs = list(c.messages)
+    if 0 <= index < len(new_msgs):
+        new_msgs[index] = text
+    return dc_replace(c, messages=new_msgs)

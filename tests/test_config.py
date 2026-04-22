@@ -52,13 +52,13 @@ def test_valid_interval_accepted(minutes):
     config.validate_interval_minutes(minutes)  # no raise
 
 
-@pytest.mark.parametrize("seconds", [2, 0, -1, 61, 100])
+@pytest.mark.parametrize("seconds", [-1, -100, 601, 99999])
 def test_invalid_auto_close_rejected(seconds):
     with pytest.raises(ValueError):
         config.validate_auto_close(seconds)
 
 
-@pytest.mark.parametrize("seconds", [3, 12, 60])
+@pytest.mark.parametrize("seconds", [0, 10, 30, 60, 300, 600])
 def test_valid_auto_close_accepted(seconds):
     config.validate_auto_close(seconds)  # no raise
 
@@ -100,3 +100,109 @@ def test_add_remove_update_set(config_file):
 
     c4 = config.remove_set(c3, "new")
     assert len(c4.sets) == 5
+
+
+# ---------- v2 신규 필드 ----------
+
+def test_default_has_all_v2_fields(config_file):
+    c = config.load()
+    assert c.goal == 8
+    assert c.days == [0, 1, 2, 3, 4, 5, 6]
+    assert c.character_id == "happy"
+    assert c.messages == config.DEFAULT_MESSAGES
+    assert c.snooze_minutes == 5
+    assert c.sound_enabled is False
+    assert c.sound_name == "drop"
+    assert c.volume == 60
+    assert c.minimize_on_start is False
+    assert c.tray_icon is True
+    assert c.close_behavior == "tray"
+
+
+def test_v1_file_migrates_messages_from_sets(config_file):
+    """기존 사용자의 config.json에 messages가 없으면 sets의 메시지로 채운다."""
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    v1_data = {
+        "interval_minutes": 60,
+        "active_start": "09:00",
+        "active_end": "22:00",
+        "popup_position": "bottom_right",
+        "auto_close_seconds": 12,
+        "autostart": True,
+        "sets": [
+            {"id": "a", "image_path": "x.png", "message": "메시지 A"},
+            {"id": "b", "image_path": "y.png", "message": "메시지 B"},
+        ],
+        # messages, goal, days 등 신규 필드 전부 없음
+    }
+    config_file.write_text(json.dumps(v1_data, ensure_ascii=False), encoding="utf-8")
+    c = config.load()
+    assert c.messages == ["메시지 A", "메시지 B"]
+    assert c.goal == 8  # 신규 필드는 기본값
+
+
+@pytest.mark.parametrize("g", [0, -1, 17, 100])
+def test_invalid_goal_rejected(g):
+    with pytest.raises(ValueError):
+        config.validate_goal(g)
+
+
+@pytest.mark.parametrize("g", [1, 8, 16])
+def test_valid_goal_accepted(g):
+    config.validate_goal(g)
+
+
+@pytest.mark.parametrize("ch", ["happy", "excited", "sleepy"])
+def test_valid_character(ch):
+    config.validate_character(ch)
+
+
+def test_invalid_character_rejected():
+    with pytest.raises(ValueError):
+        config.validate_character("grumpy")
+
+
+def test_invalid_sound_rejected():
+    with pytest.raises(ValueError):
+        config.validate_sound("wrong")
+
+
+def test_invalid_close_behavior_rejected():
+    with pytest.raises(ValueError):
+        config.validate_close_behavior("burn")
+
+
+@pytest.mark.parametrize("v", [-1, 101])
+def test_invalid_volume_rejected(v):
+    with pytest.raises(ValueError):
+        config.validate_volume(v)
+
+
+@pytest.mark.parametrize("v", [0, 50, 100])
+def test_valid_volume_accepted(v):
+    config.validate_volume(v)
+
+
+@pytest.mark.parametrize("days", [[-1], [7], [1, 2, 8], "not a list"])
+def test_invalid_days_rejected(days):
+    with pytest.raises(ValueError):
+        config.validate_days(days)
+
+
+def test_valid_days_all():
+    config.validate_days([0, 1, 2, 3, 4, 5, 6])
+
+
+def test_message_crud(config_file):
+    c = config.load()
+    original_count = len(c.messages)
+
+    c2 = config.add_message(c, "새 메시지")
+    assert c2.messages[-1] == "새 메시지"
+    assert len(c2.messages) == original_count + 1
+
+    c3 = config.update_message(c2, len(c2.messages) - 1, "수정됨")
+    assert c3.messages[-1] == "수정됨"
+
+    c4 = config.remove_message(c3, 0)
+    assert len(c4.messages) == original_count
