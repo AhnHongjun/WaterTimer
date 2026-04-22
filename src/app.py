@@ -59,6 +59,14 @@ class Application:
         # 시작 직후 한 번 판정 (09:00 진입 등 케이스)
         QTimer.singleShot(1000, self.tick)
 
+        # 자동 시작 레지스트리 동기화
+        self._sync_autostart()
+
+    def _sync_autostart(self):
+        from src import autostart
+        exe = autostart.current_exe_path()
+        autostart.set_autostart(self.cfg.autostart, exe)
+
     # ---------- 콜백 ----------
 
     def tick(self):
@@ -130,6 +138,7 @@ class Application:
             self.tray.set_warning("등록된 이미지·메시지 세트가 없습니다. 설정에서 추가하세요.")
         else:
             self.tray.set_warning(None)
+        self._sync_autostart()
 
     def quit(self):
         self.qt_app.quit()
