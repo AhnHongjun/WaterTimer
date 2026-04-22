@@ -108,8 +108,16 @@ class Application:
         self.tray.set_paused(self.paused)
 
     def open_settings(self):
-        # MVP에서는 stub. Phase 2에서 구현.
-        self.tray.showMessage("Water Timer", "설정 창은 곧 추가됩니다", icon=self.tray.Information)
+        from src.settings_window import SettingsWindow
+        dlg = SettingsWindow(self.cfg, on_save=self._on_config_saved)
+        dlg.exec()
+
+    def _on_config_saved(self, new_cfg):
+        self.cfg = new_cfg
+        if not self.cfg.sets:
+            self.tray.set_warning("등록된 이미지·메시지 세트가 없습니다. 설정에서 추가하세요.")
+        else:
+            self.tray.set_warning(None)
 
     def quit(self):
         self.qt_app.quit()
