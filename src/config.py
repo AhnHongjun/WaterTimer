@@ -65,9 +65,9 @@ class Config:
     # ---- v2 신규 필드 ----
     goal: int = 8                               # 하루 목표 잔 수
     days: List[int] = field(default_factory=lambda: list(ALL_DAYS))  # 알림 요일 (0=월)
-    character_id: str = "happy"                 # 팝업 캐릭터: happy/excited/sleepy/custom
+    active_character_ids: List[str] = field(default_factory=lambda: ["happy"])  # 빌트인 캐릭터 활성 목록 (happy/excited/sleepy)
     character_image_paths: List[str] = field(default_factory=list)   # 사용자가 업로드한 이미지 전체 카탈로그
-    active_image_paths: List[str] = field(default_factory=list)      # 'custom' 모드에서 랜덤 순환에 참여할 subset
+    active_image_paths: List[str] = field(default_factory=list)      # 업로드 이미지 활성 목록 (랜덤 풀 참여)
     messages: List[str] = field(default_factory=list)                # 알림 메시지 (평면 목록)
     snooze_minutes: int = 5                     # "5분 뒤" 스누즈 분
     sound_enabled: bool = False
@@ -95,7 +95,7 @@ def _default() -> Config:
         sets=sets,
         goal=8,
         days=list(ALL_DAYS),
-        character_id="happy",
+        active_character_ids=["happy"],
         character_image_paths=[],
         active_image_paths=[],
         messages=list(DEFAULT_MESSAGES),
@@ -129,6 +129,14 @@ def validate_position(p: str) -> None:
 def validate_character(c: str) -> None:
     if c not in VALID_CHARACTERS:
         raise ValueError(f"지원하지 않는 캐릭터: {c}")
+
+
+def validate_character_list(ids) -> None:
+    if not isinstance(ids, list):
+        raise ValueError("active_character_ids는 리스트여야 합니다")
+    for cid in ids:
+        if not isinstance(cid, str) or cid not in BUILTIN_CHARACTERS:
+            raise ValueError(f"지원하지 않는 빌트인 캐릭터: {cid!r}")
 
 
 def validate_sound(name: str) -> None:
@@ -189,6 +197,25 @@ def _to_dict(c: Config) -> dict:
     return d
 
 
+def _migrate_character_ids(d: dict, default: List[str]) -> List[str]:
+    """v2/v3.x → v3.3 마이그레이션.
+
+    - active_character_ids가 이미 있으면 그대로(유효한 값만 필터).
+    - 없고 character_id가 빌트인이면 [character_id].
+    - character_id='custom' 이면 빌트인은 전부 비활성 → [].
+    - 둘 다 없으면 기본값.
+    """
+    if "active_character_ids" in d:
+        return [cid for cid in d["active_character_ids"]
+                if isinstance(cid, str) and cid in BUILTIN_CHARACTERS]
+    legacy = d.get("character_id")
+    if legacy in BUILTIN_CHARACTERS:
+        return [legacy]
+    if legacy == "custom":
+        return []
+    return list(default)
+
+
 def _from_dict(d: dict) -> Config:
     """파일에서 읽은 dict → Config.
 
@@ -223,7 +250,7 @@ def _from_dict(d: dict) -> Config:
         sets=sets,
         goal=int(d.get("goal", defaults.goal)),
         days=list(d.get("days", defaults.days)),
-        character_id=str(d.get("character_id", defaults.character_id)),
+        active_character_ids=_migrate_character_ids(d, defaults.active_character_ids),
         character_image_paths=image_paths,
         active_image_paths=active_paths,
         messages=list(messages),
@@ -244,7 +271,7 @@ def _validate(c: Config) -> None:
     validate_active_window(c.active_start, c.active_end)
     validate_goal(c.goal)
     validate_days(c.days)
-    validate_character(c.character_id)
+    validate_character_list(c.active_character_ids)
     validate_sound(c.sound_name)
     validate_volume(c.volume)
     validate_snooze(c.snooze_minutes)

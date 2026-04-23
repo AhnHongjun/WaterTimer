@@ -108,7 +108,7 @@ def test_default_has_all_v2_fields(config_file):
     c = config.load()
     assert c.goal == 8
     assert c.days == [0, 1, 2, 3, 4, 5, 6]
-    assert c.character_id == "happy"
+    assert c.active_character_ids == ["happy"]
     assert c.messages == config.DEFAULT_MESSAGES
     assert c.snooze_minutes == 5
     assert c.sound_enabled is False
@@ -152,14 +152,6 @@ def test_valid_goal_accepted(g):
     config.validate_goal(g)
 
 
-@pytest.mark.parametrize("ch", ["happy", "excited", "sleepy"])
-def test_valid_character(ch):
-    config.validate_character(ch)
-
-
-def test_invalid_character_rejected():
-    with pytest.raises(ValueError):
-        config.validate_character("grumpy")
 
 
 def test_invalid_sound_rejected():
@@ -206,3 +198,57 @@ def test_message_crud(config_file):
 
     c4 = config.remove_message(c3, 0)
     assert len(c4.messages) == original_count
+
+
+def test_default_active_character_ids_is_happy(config_file):
+    c = config.load()
+    assert c.active_character_ids == ["happy"]
+
+
+def test_migrates_builtin_character_id_to_list(config_file):
+    """기존 config에 character_id='sleepy' 만 있으면 active_character_ids=['sleepy']로 마이그레이션."""
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    v2_data = {
+        "interval_minutes": 60,
+        "active_start": "09:00",
+        "active_end": "22:00",
+        "popup_position": "bottom_right",
+        "auto_close_seconds": 12,
+        "autostart": True,
+        "sets": [],
+        "character_id": "sleepy",
+    }
+    config_file.write_text(json.dumps(v2_data, ensure_ascii=False), encoding="utf-8")
+    c = config.load()
+    assert c.active_character_ids == ["sleepy"]
+
+
+def test_migrates_custom_character_id_to_empty_builtin_list(config_file):
+    """character_id='custom' 이면 빌트인은 전부 비활성. (업로드 이미지 쪽에서 처리)"""
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    v2_data = {
+        "interval_minutes": 60,
+        "active_start": "09:00",
+        "active_end": "22:00",
+        "popup_position": "bottom_right",
+        "auto_close_seconds": 12,
+        "autostart": True,
+        "sets": [],
+        "character_id": "custom",
+    }
+    config_file.write_text(json.dumps(v2_data, ensure_ascii=False), encoding="utf-8")
+    c = config.load()
+    assert c.active_character_ids == []
+
+
+@pytest.mark.parametrize("ids", [[], ["happy"], ["happy", "sleepy"],
+                                 ["happy", "excited", "sleepy"]])
+def test_validate_character_list_accepts_subsets(ids):
+    config.validate_character_list(ids)  # no raise
+
+
+@pytest.mark.parametrize("ids", [["grumpy"], ["happy", "unknown"],
+                                 "not a list", [123]])
+def test_validate_character_list_rejects_invalid(ids):
+    with pytest.raises(ValueError):
+        config.validate_character_list(ids)
