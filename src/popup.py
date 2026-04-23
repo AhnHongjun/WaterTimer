@@ -245,8 +245,8 @@ class Popup(QWidget):
                 border: 1px solid {tokens.LINE};
             }}
         """)
-        # 그림자: QGraphicsDropShadowEffect 는 Qt.Tool + WA_TranslucentBackground
-        # 조합에서 자식 위젯 클릭 이벤트를 막는 것으로 알려진 버그가 있어 사용하지 않음.
+        # 그림자: QGraphicsDropShadowEffect + WA_TranslucentBackground 조합이
+        # 자식 위젯 클릭 이벤트를 막는 Qt 버그(QTBUG-17314)가 있어 사용하지 않음.
         # 옅은 1px 테두리로 경계만 살림.
         outer.addWidget(container)
 
@@ -449,8 +449,9 @@ class Popup(QWidget):
                 10,
             )
             self._close_btn.raise_()
-        # Qt.Tool + FramelessWindowHint 창이 Windows에서 첫 클릭을 "activation"으로
-        # 소비해버리는 것을 막기 위해 명시적으로 활성화·포커스.
+        # 트레이 기반 컨텍스트에서 팝업이 포커스·최상단을 안정적으로 차지하도록
+        # 명시적으로 raise/activate. Qt.Dialog 플래그와 함께 쓰면 무해하고
+        # 첫 클릭을 단순 activation으로 소비되는 상황을 예방함.
         self.raise_()
         self.activateWindow()
         self._slide_in()
