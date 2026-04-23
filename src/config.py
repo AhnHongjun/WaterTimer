@@ -15,9 +15,7 @@ from src import paths
 
 
 VALID_POSITIONS = {"bottom_right", "bottom_left", "top_right", "top_left", "center"}
-# 내장 캐릭터 3종 + "custom" (character_image_path를 사용)
 BUILTIN_CHARACTERS = {"happy", "excited", "sleepy"}
-VALID_CHARACTERS = BUILTIN_CHARACTERS | {"custom"}
 VALID_SOUNDS = {"drop", "chime", "bubble", "soft", "off"}
 VALID_CLOSE_BEHAVIORS = {"tray", "quit", "ask"}
 
@@ -124,11 +122,6 @@ def validate_auto_close(s: int) -> None:
 def validate_position(p: str) -> None:
     if p not in VALID_POSITIONS:
         raise ValueError(f"지원하지 않는 위치: {p}")
-
-
-def validate_character(c: str) -> None:
-    if c not in VALID_CHARACTERS:
-        raise ValueError(f"지원하지 않는 캐릭터: {c}")
 
 
 def validate_character_list(ids) -> None:
