@@ -41,7 +41,7 @@ class Application:
         self.state = state_mod.load()
         self.paused = False
         self._last_message_index: Optional[int] = None
-        self._last_image_path: Optional[str] = None
+        self._last_pick: Optional[tuple] = None   # (kind, value) — 직전 팝업 캐릭터
         self.active_popup: Optional[Popup] = None
         self.sound_player = SoundPlayer()
 
@@ -95,6 +95,7 @@ class Application:
         if reloaded.date != self.state.date:
             self.state = reloaded
             self._last_message_index = None
+            self._last_pick = None
             self.tray.set_count(self.state.count)
 
         now = datetime.now()
@@ -131,29 +132,43 @@ class Application:
             return
         self.show_popup(datetime.now(), force=True)
 
-    def _pick_image(self) -> str:
-        """character_id=='custom'일 때 활성 풀에서 랜덤 하나. 직전 것과 중복 회피."""
-        paths = [p for p in self.cfg.active_image_paths if p]
-        if not paths:
-            return ""
-        if len(paths) == 1:
-            self._last_image_path = paths[0]
-            return paths[0]
-        candidates = [p for p in paths if p != self._last_image_path] or list(paths)
+    def _pick_for_popup(self) -> tuple:
+        """팝업에 보여줄 캐릭터 하나 선택.
+
+        반환: (kind, value) 형태.
+          - ("builtin", mood) — 내장 캐릭터 (mood in happy/excited/sleepy)
+          - ("custom", image_path) — 업로드 이미지
+
+        풀은 active_character_ids + active_image_paths. 둘 다 비면
+        ("builtin", "happy") 로 fallback. 직전 선택과 중복 회피.
+        """
+        pool = [("builtin", cid) for cid in self.cfg.active_character_ids]
+        pool += [("custom", p) for p in self.cfg.active_image_paths if p]
+        if not pool:
+            self._last_pick = ("builtin", "happy")
+            return self._last_pick
+        if len(pool) == 1:
+            self._last_pick = pool[0]
+            return pool[0]
+        candidates = [x for x in pool if x != self._last_pick] or list(pool)
         chosen = random.choice(candidates)
-        self._last_image_path = chosen
+        self._last_pick = chosen
         return chosen
 
     def show_popup(self, now: datetime, force: bool = False):
         message = self._pick_message()
         if message is None:
             return
-        image_path = ""
-        if self.cfg.character_id == "custom":
-            image_path = self._pick_image()
+        kind, value = self._pick_for_popup()
+        if kind == "custom":
+            popup_char_id = "custom"
+            popup_image_path = value
+        else:
+            popup_char_id = value
+            popup_image_path = ""
         self.active_popup = Popup(
-            character_id=self.cfg.character_id,
-            character_image_path=image_path,
+            character_id=popup_char_id,
+            character_image_path=popup_image_path,
             message=message,
             auto_close_seconds=self.cfg.auto_close_seconds,
             position=self.cfg.popup_position,
