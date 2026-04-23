@@ -73,7 +73,7 @@ class _TitleBar(QFrame):
         self._min_btn = self._mk_window_btn("–", self._on_minimize)
         self._max_btn = self._mk_window_btn("▢", lambda: None)   # QDialog 최대화 비활성 (시각 placeholder)
         self._max_btn.setEnabled(False)
-        self._close_btn = self._mk_window_btn("✕", parent_dialog.accept)
+        self._close_btn = self._mk_window_btn("✕", parent_dialog._handle_close_request)
         root.addWidget(self._min_btn)
         root.addWidget(self._max_btn)
         root.addWidget(self._close_btn)
@@ -362,6 +362,42 @@ class SettingsWindow(QDialog):
 
     def _build_sound_tab(self) -> QWidget:
         return _SoundPanel(self)
+
+    def _build_system_tab(self) -> QWidget:
+        return _SystemPanel(self)
+
+    # ---------- 닫기 동작 ----------
+
+    def _handle_close_request(self) -> None:
+        """타이틀바 ✕ 눌렀을 때. cfg.close_behavior에 따라 분기."""
+        behavior = self._cfg.close_behavior
+        if behavior == "quit":
+            from PySide6.QtWidgets import QApplication
+            self.accept()
+            qa = QApplication.instance()
+            if qa:
+                qa.quit()
+            return
+        if behavior == "ask":
+            box = QMessageBox(self)
+            box.setWindowTitle("Water Timer")
+            box.setText("설정창을 어떻게 닫을까요?")
+            hide_btn = box.addButton("트레이로 숨기기", QMessageBox.AcceptRole)
+            quit_btn = box.addButton("프로그램 종료", QMessageBox.DestructiveRole)
+            box.addButton("취소", QMessageBox.RejectRole)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is hide_btn:
+                self.accept()
+            elif clicked is quit_btn:
+                self.accept()
+                from PySide6.QtWidgets import QApplication
+                qa = QApplication.instance()
+                if qa:
+                    qa.quit()
+            return
+        # default: tray
+        self.accept()
 
     # ---------- 편의: 변경 → 저장 ----------
 
@@ -2018,3 +2054,81 @@ class _SoundPanel(QWidget):
             self, "준비 중",
             f"'{dict(SOUNDS).get(sound_id, sound_id)}' 미리듣기는 다음 버전에서 지원됩니다."
         )
+
+
+# ---------- 시작·트레이 탭 ----------
+
+_CLOSE_BEHAVIORS = [
+    ("tray", "트레이로 숨기기"),
+    ("quit", "프로그램 종료"),
+    ("ask",  "매번 물어보기"),
+]
+
+
+class _SystemPanel(QWidget):
+    """시작·트레이 탭. autostart/minimize/tray_icon 토글 + close_behavior select."""
+
+    def __init__(self, sw: "SettingsWindow", parent=None):
+        super().__init__(parent)
+        self._sw = sw
+        self.setStyleSheet(f"background-color: {tokens.SURFACE};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ---- 시작 프로그램 ----
+        s1 = Section("시작 프로그램")
+        root.addWidget(s1)
+
+        auto_row = KVRow("Windows 시작 시 자동 실행", hint="컴퓨터 켜면 자동으로 실행돼요")
+        self._autostart_toggle = _Toggle(
+            sw._cfg.autostart,
+            lambda on: self._sw._apply(autostart=on),
+        )
+        auto_row.set_control(self._autostart_toggle)
+        s1.add(auto_row)
+
+        min_row = KVRow("최소화 상태로 시작", hint="시작할 때 설정창을 열지 않아요")
+        self._minimize_toggle = _Toggle(
+            sw._cfg.minimize_on_start,
+            lambda on: self._sw._apply(minimize_on_start=on),
+        )
+        min_row.set_control(self._minimize_toggle)
+        s1.add(min_row)
+
+        # ---- 트레이 ----
+        s2 = Section("트레이")
+        root.addWidget(s2)
+
+        tray_row = KVRow("트레이 아이콘 표시",
+                         hint="끄면 앱이 백그라운드에서만 돌게 돼요")
+        self._tray_toggle = _Toggle(
+            sw._cfg.tray_icon,
+            lambda on: self._sw._apply(tray_icon=on),
+        )
+        tray_row.set_control(self._tray_toggle)
+        s2.add(tray_row)
+
+        close_row = KVRow("닫기 버튼 동작",
+                          hint="설정 창의 X 버튼을 눌렀을 때 어떻게 할까요?")
+        self._close_combo = QComboBox()
+        for cid, clabel in _CLOSE_BEHAVIORS:
+            self._close_combo.addItem(clabel, cid)
+        # 현재 값으로 인덱스 설정
+        current_idx = next(
+            (i for i, (cid, _) in enumerate(_CLOSE_BEHAVIORS)
+             if cid == sw._cfg.close_behavior),
+            0,
+        )
+        self._close_combo.setCurrentIndex(current_idx)
+        self._close_combo.setFixedWidth(180)
+        self._close_combo.setStyleSheet(_INPUT_STYLE)
+        self._close_combo.currentIndexChanged.connect(self._on_close_behavior)
+        close_row.set_control(self._close_combo)
+        s2.add(close_row)
+
+        root.addStretch(1)
+
+    def _on_close_behavior(self, _idx: int):
+        self._sw._apply(close_behavior=str(self._close_combo.currentData()))
