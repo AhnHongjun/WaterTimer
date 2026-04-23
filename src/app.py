@@ -41,7 +41,7 @@ class Application:
         self.state = state_mod.load()
         self.paused = False
         self._last_message_index: Optional[int] = None
-        self._last_pick: Optional[tuple] = None   # (kind, value) — 직전 팝업 캐릭터
+        self._last_pick: Optional[tuple[str, str]] = None   # (kind, value) — 직전 팝업 캐릭터
         self.active_popup: Optional[Popup] = None
         self.sound_player = SoundPlayer()
 
@@ -132,7 +132,7 @@ class Application:
             return
         self.show_popup(datetime.now(), force=True)
 
-    def _pick_for_popup(self) -> tuple:
+    def _pick_for_popup(self) -> tuple[str, str]:
         """팝업에 보여줄 캐릭터 하나 선택.
 
         반환: (kind, value) 형태.
