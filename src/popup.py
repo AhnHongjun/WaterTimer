@@ -72,15 +72,14 @@ class _DropParticle(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        # 물방울 모양 path — viewBox 14×18 비율
         w, h = self.width(), self.height()
-        path = QPainterPath()
-        # M7 1 C 7 1 1 8 1 12 A 6 6 0 0 0 13 12 C 13 8 7 1 7 1 Z
         cx = w / 2
-        path.moveTo(cx, h * 0.05)
-        path.cubicTo(cx, h * 0.05, w * 0.07, h * 0.44, w * 0.07, h * 0.67)
-        path.arcTo(QRect(int(w * 0.07), int(h * 0.33), int(w * 0.86), int(h * 0.67)), 180, -180)
-        path.cubicTo(w * 0.93, h * 0.44, cx, h * 0.05, cx, h * 0.05)
+        path = QPainterPath()
+        # 위 꼭짓점에서 시작해 우측 곡선으로 하단까지, 다시 좌측 곡선으로 위로 닫는 물방울
+        path.moveTo(cx, 0)
+        path.cubicTo(w, h * 0.45, w, h * 0.75, cx, h)
+        path.cubicTo(0, h * 0.75, 0, h * 0.45, cx, 0)
+        path.closeSubpath()
         p.fillPath(path, QBrush(self._color))
 
 
