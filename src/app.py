@@ -41,6 +41,7 @@ class Application:
         self.state = state_mod.load()
         self.paused = False
         self._last_message_index: Optional[int] = None
+        self._last_image_path: Optional[str] = None
         self.active_popup: Optional[Popup] = None
         self.sound_player = SoundPlayer()
 
@@ -130,13 +131,29 @@ class Application:
             return
         self.show_popup(datetime.now(), force=True)
 
+    def _pick_image(self) -> str:
+        """character_id=='custom'일 때 풀에서 랜덤 하나. 직전 것과 중복 회피."""
+        paths = [p for p in self.cfg.character_image_paths if p]
+        if not paths:
+            return ""
+        if len(paths) == 1:
+            self._last_image_path = paths[0]
+            return paths[0]
+        candidates = [p for p in paths if p != self._last_image_path] or list(paths)
+        chosen = random.choice(candidates)
+        self._last_image_path = chosen
+        return chosen
+
     def show_popup(self, now: datetime, force: bool = False):
         message = self._pick_message()
         if message is None:
             return
+        image_path = ""
+        if self.cfg.character_id == "custom":
+            image_path = self._pick_image()
         self.active_popup = Popup(
             character_id=self.cfg.character_id,
-            character_image_path=self.cfg.character_image_path,
+            character_image_path=image_path,
             message=message,
             auto_close_seconds=self.cfg.auto_close_seconds,
             position=self.cfg.popup_position,

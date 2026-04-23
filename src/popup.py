@@ -21,7 +21,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor, QGuiApplication, QPainter, QPainterPath, QLinearGradient,
-    QFont, QPen, QBrush,
+    QFont, QPen, QBrush, QPixmap,
 )
 from PySide6.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QFrame,
