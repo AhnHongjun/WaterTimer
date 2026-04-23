@@ -1415,7 +1415,11 @@ CHARACTERS = [
 
 
 class _CharacterCard(QFrame):
-    """캐릭터 선택 카드. 그라디언트 배경 + Droplet + 이름 라벨."""
+    """캐릭터 선택 카드. 그라디언트 배경 + Droplet + 이름 라벨.
+
+    on_click 콜백으로 해당 id를 넘긴다. 선택 상태는 외부(부모)가 관리하며
+    set_selected() 로 반영해준다. 라디오가 아니라 토글처럼 사용 가능.
+    """
 
     def __init__(self, char_id: str, name: str, selected: bool,
                  on_click: Callable[[str], None], parent=None):
@@ -1493,7 +1497,7 @@ class _UserImageCard(QFrame):
     """업로드된 사용자 이미지 하나를 나타내는 카드.
 
     - 썸네일 + 우상단 × (삭제)
-    - 클릭 시 character_id='custom' 으로 전환 (여러 장이면 모두 sky 선택 테두리)
+    - 클릭 시 active_image_paths 에 토글 (활성이면 sky 선택 테두리)
     - selected 상태(모든 커스텀 카드)면 sky-500 테두리
     """
 
@@ -1717,9 +1721,12 @@ class _CustomPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ---- 캐릭터 이미지 ----
-        char_section = Section("캐릭터 이미지",
-                               hint="팝업에 표시할 이미지를 선택하세요")
+        # ---- 캐릭터 ----
+        char_section = Section(
+            "캐릭터",
+            hint="원하는 캐릭터·이미지를 여러 개 고르면 팝업마다 랜덤으로 나와요. "
+                 "아무것도 안 고르면 기본 캐릭터가 나타나요.",
+        )
         root.addWidget(char_section)
 
         # 캐릭터 그리드 컨테이너 — 업로드/삭제 시 rebuild
@@ -1786,10 +1793,9 @@ class _CustomPanel(QWidget):
     def _rebuild_character_grid(self):
         """그리드를 현재 config 기준으로 다시 구성.
 
-        - 빌트인 3종 + 업로드된 이미지들 + '+ 업로드' 카드.
-        - 업로드 이미지는 active_image_paths에 포함됐는지에 따라 개별 선택 상태.
-        - 활성 이미지가 하나 이상 있으면 character_id='custom' (팝업에서 랜덤 순환),
-          아무것도 활성이 아니면 빌트인 모드로 복귀.
+        빌트인 3종 + 업로드된 이미지들 + '+ 업로드' 카드. 모든 카드가 개별 토글.
+        - 빌트인: active_character_ids 에 포함되면 선택 상태.
+        - 업로드: active_image_paths 에 포함되면 선택 상태.
         """
         while self._char_grid_layout.count():
             item = self._char_grid_layout.takeAt(0)
@@ -1798,25 +1804,25 @@ class _CustomPanel(QWidget):
                 w.deleteLater()
 
         cfg = self._sw._cfg
-        active_set = set(cfg.active_image_paths)
-        is_custom_mode = (cfg.character_id == "custom" and bool(active_set))
+        active_builtin_set = set(cfg.active_character_ids)
+        active_image_set = set(cfg.active_image_paths)
 
         self._char_cards: list[_CharacterCard] = []
         self._user_cards: dict[str, _UserImageCard] = {}
 
         cards: list[QWidget] = []
-        # 1) 빌트인 3종 — custom 모드가 아닐 때만 선택 표시
+        # 1) 빌트인 3종 — 각자 토글
         for cid, name in CHARACTERS:
             c = _CharacterCard(cid, name,
-                               selected=(cfg.character_id == cid and not is_custom_mode),
-                               on_click=self._on_builtin_click)
+                               selected=(cid in active_builtin_set),
+                               on_click=self._toggle_builtin)
             self._char_cards.append(c)
             cards.append(c)
-        # 2) 업로드된 이미지들 — 각자 active 여부로 개별 선택 표시
+        # 2) 업로드 이미지들
         for p in cfg.character_image_paths:
             card = _UserImageCard(
                 image_path=p,
-                selected=(p in active_set),
+                selected=(p in active_image_set),
                 on_select=lambda pp=p: self._toggle_user_image(pp),
                 on_remove=self._remove_user_image,
             )
@@ -1830,31 +1836,24 @@ class _CustomPanel(QWidget):
             r, c = divmod(i, cols)
             self._char_grid_layout.addWidget(card, r, c)
 
-    def _on_builtin_click(self, char_id: str):
-        """빌트인 클릭 → 해당 빌트인 모드로 전환. active 선택은 유지(기억됨)."""
-        self._sw._apply(character_id=char_id)
+    def _toggle_builtin(self, char_id: str):
+        """빌트인 카드 클릭 → active_character_ids 에 토글."""
+        active = list(self._sw._cfg.active_character_ids)
+        if char_id in active:
+            active.remove(char_id)
+        else:
+            active.append(char_id)
+        self._sw._apply(active_character_ids=active)
         self._rebuild_character_grid()
 
     def _toggle_user_image(self, path: str):
-        """업로드 이미지 카드 클릭 → active 여부 개별 토글.
-
-        - 활성이 하나 이상 있으면 character_id='custom'
-        - 모두 비활성이면 character_id='happy' (빌트인 기본)로 복귀
-        """
-        cfg = self._sw._cfg
-        active = list(cfg.active_image_paths)
+        """업로드 이미지 카드 클릭 → active_image_paths 에 토글."""
+        active = list(self._sw._cfg.active_image_paths)
         if path in active:
             active.remove(path)
         else:
             active.append(path)
-        changes = {"active_image_paths": active}
-        if active:
-            changes["character_id"] = "custom"
-        else:
-            # 활성 이미지가 없으면 빌트인 모드로 복귀
-            if cfg.character_id == "custom":
-                changes["character_id"] = "happy"
-        self._sw._apply(**changes)
+        self._sw._apply(active_image_paths=active)
         self._rebuild_character_grid()
 
     def _pick_file(self):
@@ -1883,7 +1882,6 @@ class _CustomPanel(QWidget):
         self._sw._apply(
             character_image_paths=new_paths,
             active_image_paths=new_active,
-            character_id="custom",
         )
         self._rebuild_character_grid()
 
@@ -1891,14 +1889,10 @@ class _CustomPanel(QWidget):
         from src import character_image
         new_paths = [p for p in self._sw._cfg.character_image_paths if p != path]
         new_active = [p for p in self._sw._cfg.active_image_paths if p != path]
-        changes = {
-            "character_image_paths": new_paths,
-            "active_image_paths": new_active,
-        }
-        # 활성이 하나도 없으면 빌트인으로 되돌림
-        if not new_active and self._sw._cfg.character_id == "custom":
-            changes["character_id"] = "happy"
-        self._sw._apply(**changes)
+        self._sw._apply(
+            character_image_paths=new_paths,
+            active_image_paths=new_active,
+        )
         character_image.clear_user_image(path)
         self._rebuild_character_grid()
 
