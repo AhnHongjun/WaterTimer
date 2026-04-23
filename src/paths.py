@@ -22,3 +22,10 @@ def state_path() -> Path:
 
 def error_log_path() -> Path:
     return app_data_dir() / "error.log"
+
+
+def characters_dir() -> Path:
+    """사용자가 업로드한 캐릭터 이미지 저장소. %APPDATA%\\WaterTimer\\characters\\"""
+    d = app_data_dir() / "characters"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

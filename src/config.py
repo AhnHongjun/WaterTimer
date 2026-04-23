@@ -15,7 +15,9 @@ from src import paths
 
 
 VALID_POSITIONS = {"bottom_right", "bottom_left", "top_right", "top_left", "center"}
-VALID_CHARACTERS = {"happy", "excited", "sleepy"}
+# 내장 캐릭터 3종 + "custom" (character_image_path를 사용)
+BUILTIN_CHARACTERS = {"happy", "excited", "sleepy"}
+VALID_CHARACTERS = BUILTIN_CHARACTERS | {"custom"}
 VALID_SOUNDS = {"drop", "chime", "bubble", "soft", "off"}
 VALID_CLOSE_BEHAVIORS = {"tray", "quit", "ask"}
 
@@ -63,7 +65,8 @@ class Config:
     # ---- v2 신규 필드 ----
     goal: int = 8                               # 하루 목표 잔 수
     days: List[int] = field(default_factory=lambda: list(ALL_DAYS))  # 알림 요일 (0=월)
-    character_id: str = "happy"                 # 팝업 캐릭터 mood
+    character_id: str = "happy"                 # 팝업 캐릭터: happy/excited/sleepy/custom
+    character_image_path: str = ""               # character_id=="custom"일 때 표시할 이미지 절대 경로
     messages: List[str] = field(default_factory=list)                # 알림 메시지 (평면 목록)
     snooze_minutes: int = 5                     # "5분 뒤" 스누즈 분
     sound_enabled: bool = False
@@ -92,6 +95,7 @@ def _default() -> Config:
         goal=8,
         days=list(ALL_DAYS),
         character_id="happy",
+        character_image_path="",
         messages=list(DEFAULT_MESSAGES),
         snooze_minutes=5,
         sound_enabled=False,
@@ -206,6 +210,7 @@ def _from_dict(d: dict) -> Config:
         goal=int(d.get("goal", defaults.goal)),
         days=list(d.get("days", defaults.days)),
         character_id=str(d.get("character_id", defaults.character_id)),
+        character_image_path=str(d.get("character_image_path", defaults.character_image_path)),
         messages=list(messages),
         snooze_minutes=int(d.get("snooze_minutes", defaults.snooze_minutes)),
         sound_enabled=bool(d.get("sound_enabled", defaults.sound_enabled)),

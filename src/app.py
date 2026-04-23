@@ -26,6 +26,7 @@ from src import config as config_mod
 from src import scheduler
 from src import state as state_mod
 from src.popup import Popup, fallback_icon_path
+from src.sound_player import SoundPlayer
 from src.tray import Tray
 
 TICK_MS = 60_000  # 1분
@@ -41,6 +42,7 @@ class Application:
         self.paused = False
         self._last_message_index: Optional[int] = None
         self.active_popup: Optional[Popup] = None
+        self.sound_player = SoundPlayer()
 
         self.tray = Tray(
             icon_path=fallback_icon_path(),
@@ -134,6 +136,7 @@ class Application:
             return
         self.active_popup = Popup(
             character_id=self.cfg.character_id,
+            character_image_path=self.cfg.character_image_path,
             message=message,
             auto_close_seconds=self.cfg.auto_close_seconds,
             position=self.cfg.popup_position,
@@ -144,6 +147,8 @@ class Application:
             on_snooze=self.on_snooze,
         )
         self.active_popup.show()
+        if self.cfg.sound_enabled:
+            self.sound_player.play(self.cfg.sound_name, self.cfg.volume)
         if not force:
             self.state = state_mod.update_last_notified(self.state, now)
 
@@ -169,6 +174,7 @@ class Application:
             on_save=self._on_config_saved,
             on_reset_count=self._reset_count,
             on_add_cup=self._add_cup,
+            on_preview_sound=self.sound_player.play,
         )
         dlg.exec()
 

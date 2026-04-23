@@ -115,9 +115,9 @@ class _ProgressBar(QWidget):
 
 
 class _CharacterPanel(QFrame):
-    """좌측 150px 캐릭터 패널: 그라디언트 bg + Droplet."""
+    """좌측 150px 캐릭터 패널: 그라디언트 bg + Droplet 또는 커스텀 이미지."""
 
-    def __init__(self, mood: str, parent=None):
+    def __init__(self, mood: str, custom_image_path: str = "", parent=None):
         super().__init__(parent)
         self.setObjectName("charPanel")
         self.setStyleSheet(f"""
@@ -129,9 +129,30 @@ class _CharacterPanel(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 12, 6, 8)
         layout.setSpacing(0)
-        self._droplet = Droplet(size=tokens.POPUP_CHAR_SIZE, mood=mood)
+
+        # custom + 유효한 이미지면 QLabel에 scaled pixmap. 아니면 Droplet fallback.
+        use_custom = (mood == "custom" and custom_image_path
+                      and Path(custom_image_path).exists())
+        if use_custom:
+            pix = QPixmap(custom_image_path)
+            if pix.isNull():
+                use_custom = False
+        if use_custom:
+            img_label = QLabel()
+            img_label.setFixedSize(tokens.POPUP_CHAR_SIZE, tokens.POPUP_CHAR_SIZE)
+            img_label.setAlignment(Qt.AlignCenter)
+            img_label.setStyleSheet("background: transparent;")
+            img_label.setPixmap(pix.scaled(
+                tokens.POPUP_CHAR_SIZE, tokens.POPUP_CHAR_SIZE,
+                Qt.KeepAspectRatio, Qt.SmoothTransformation,
+            ))
+            self._body = img_label
+        else:
+            # mood가 "custom"인데 이미지가 없으면 happy로 fallback
+            fallback_mood = mood if mood in ("happy", "excited", "sleepy") else "happy"
+            self._body = Droplet(size=tokens.POPUP_CHAR_SIZE, mood=fallback_mood)
         layout.addStretch(1)
-        layout.addWidget(self._droplet, alignment=Qt.AlignCenter)
+        layout.addWidget(self._body, alignment=Qt.AlignCenter)
         layout.addStretch(1)
 
     def paintEvent(self, event):
@@ -146,13 +167,9 @@ class _CharacterPanel(QFrame):
         path.addRoundedRect(0, 0, self.width(), self.height(), 16, 16)
         painter.fillPath(path, QBrush(grad))
 
-    def set_mood(self, mood: str):
-        self._droplet.set_mood(mood)
-
-    def droplet_rect(self) -> QRect:
-        """파티클 원점 계산을 위해 Droplet의 화면 기준 사각형을 돌려준다."""
-        r = self._droplet.geometry()
-        return r
+    def body_rect(self) -> QRect:
+        """파티클 원점 계산용: 캐릭터(Droplet 또는 이미지) rect."""
+        return self._body.geometry()
 
 
 # ---------- Popup ----------
@@ -165,7 +182,8 @@ class Popup(QWidget):
         on_snooze: "5분 뒤" 클릭 시 호출됨 (호출측이 5분 후 재알림 예약).
 
     Args:
-        character_id: 'happy' | 'excited' | 'sleepy'
+        character_id: 'happy' | 'excited' | 'sleepy' | 'custom'
+        character_image_path: character_id='custom'일 때 사용할 이미지 경로 (절대)
         message: 팝업에 표시할 문구
         auto_close_seconds: 0이면 자동 닫힘 비활성
         position: 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right' | 'center'
@@ -185,6 +203,7 @@ class Popup(QWidget):
                  last_notified_at: Optional[datetime],
                  on_drank: Callable[[], None],
                  on_snooze: Callable[[], None],
+                 character_image_path: str = "",
                  parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._on_drank = on_drank
@@ -199,7 +218,7 @@ class Popup(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(tokens.POPUP_W, tokens.POPUP_H + 20)  # +20: shadow 여유
 
-        self._build_ui(character_id, message, last_notified_at)
+        self._build_ui(character_id, message, last_notified_at, character_image_path)
         self._place(position)
 
         # 자동 닫힘
@@ -211,7 +230,8 @@ class Popup(QWidget):
     # ---------- UI 구성 ----------
 
     def _build_ui(self, character_id: str, message: str,
-                  last_notified_at: Optional[datetime]) -> None:
+                  last_notified_at: Optional[datetime],
+                  character_image_path: str = "") -> None:
         # 외곽: 투명 배경 + 내부 컨테이너 (흰색 + 라운드 + 그림자)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 4, 10, 16)
@@ -237,7 +257,7 @@ class Popup(QWidget):
         root.setSpacing(14)
 
         # 좌측 캐릭터 패널
-        self._char_panel = _CharacterPanel(character_id, container)
+        self._char_panel = _CharacterPanel(character_id, character_image_path, container)
         self._char_panel.setFixedWidth(tokens.POPUP_CHAR_PANEL_W)
         root.addWidget(self._char_panel)
 

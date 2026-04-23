@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from typing import Callable, List, Optional
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QPoint, QSize, QTime, QByteArray, QRect, QRectF
-from PySide6.QtGui import QColor, QCursor, QPainter, QPen, QBrush
+from PySide6.QtGui import QColor, QCursor, QPainter, QPen, QBrush, QPixmap
 from PySide6.QtWidgets import (
     QDialog, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QStackedWidget, QScrollArea, QGraphicsDropShadowEffect, QSizePolicy,
@@ -235,6 +237,7 @@ class SettingsWindow(QDialog):
                  on_reset_count: Callable[[], None],
                  history: Optional[list] = None,
                  on_add_cup: Optional[Callable[[], None]] = None,
+                 on_preview_sound: Optional[Callable[[str, int], None]] = None,
                  parent=None):
         super().__init__(parent)
         self._cfg = cfg
@@ -243,6 +246,7 @@ class SettingsWindow(QDialog):
         self._on_save = on_save
         self._on_reset_count = on_reset_count
         self._on_add_cup = on_add_cup or (lambda: None)
+        self._on_preview_sound = on_preview_sound or (lambda s, v: None)
 
         # 프레임리스 + 투명 배경 (라운드 코너용)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
@@ -1486,55 +1490,142 @@ class _CharacterCard(QFrame):
 
 
 class _UploadSlot(QFrame):
-    """'+ 직접 업로드' 점선 카드 — v2에서는 디스플레이만, 클릭 시 안내."""
+    """'직접 업로드' 카드.
 
-    def __init__(self, parent=None):
+    - 등록된 이미지가 없으면: 점선 + 큰 '+' 아이콘 → 클릭 시 파일 선택
+    - 등록된 이미지가 있으면: 썸네일 표시 + 우상단 × 버튼으로 제거, 클릭하면 'custom' 선택
+    - selected 상태면 실선 sky-500 테두리
+    """
+
+    def __init__(self, image_path: str, selected: bool,
+                 on_pick_file: Callable[[], None],
+                 on_select_custom: Callable[[], None],
+                 on_clear: Callable[[], None],
+                 parent=None):
         super().__init__(parent)
         self.setObjectName("uploadSlot")
+        self._image_path = image_path
+        self._selected = selected
+        self._on_pick_file = on_pick_file
+        self._on_select_custom = on_select_custom
+        self._on_clear = on_clear
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedHeight(130)
+        self.setAttribute(Qt.WA_Hover, True)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 16, 10, 10)
+        root.setSpacing(6)
+
+        self._thumb_holder = QLabel()
+        self._thumb_holder.setAlignment(Qt.AlignCenter)
+        self._thumb_holder.setFixedHeight(72)
+        self._thumb_holder.setStyleSheet("background: transparent;")
+        root.addWidget(self._thumb_holder, alignment=Qt.AlignCenter)
+        root.addStretch(1)
+
+        self._name = QLabel()
+        self._name.setAlignment(Qt.AlignCenter)
+        root.addWidget(self._name)
+
+        # 우상단 × (이미지 있을 때만 표시)
+        self._clear_btn = QPushButton("✕", self)
+        self._clear_btn.setFixedSize(22, 22)
+        self._clear_btn.setCursor(Qt.PointingHandCursor)
+        self._clear_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {tokens.SURFACE};
+                color: {tokens.INK_3};
+                border: 1px solid {tokens.LINE_2};
+                border-radius: 11px;
+                font-size: 10px;
+            }}
+            QPushButton:hover {{ color: {tokens.SKY_700}; border-color: {tokens.SKY_300}; }}
+        """)
+        self._clear_btn.clicked.connect(self._handle_clear_click)
+
+        self._refresh_appearance()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # × 버튼 우상단 배치
+        self._clear_btn.move(self.width() - self._clear_btn.width() - 8, 8)
+
+    def _refresh_appearance(self):
+        has_img = bool(self._image_path) and Path(self._image_path).exists()
+        # 썸네일
+        if has_img:
+            pm = QPixmap(self._image_path)
+            if pm.isNull():
+                has_img = False
+            else:
+                self._thumb_holder.setPixmap(pm.scaled(
+                    72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                ))
+        if not has_img:
+            self._thumb_holder.clear()
+            self._thumb_holder.setText("＋")
+            self._thumb_holder.setStyleSheet(
+                f"background: transparent; font-size: 36px; color: {tokens.SKY_500};"
+            )
+            self._clear_btn.hide()
+        else:
+            self._clear_btn.show()
+        # 이름
+        self._name.setText("내 이미지" if has_img else "직접 업로드")
+
+        # 테두리/배경 스타일
+        if self._selected and has_img:
+            border = f"2px solid {tokens.SKY_500}"
+            bg = tokens.SKY_50
+            name_color = tokens.SKY_700
+            name_weight = 600
+        elif has_img:
+            border = f"1.5px solid {tokens.LINE_2}"
+            bg = tokens.SURFACE
+            name_color = tokens.INK_2
+            name_weight = 400
+        else:
+            # 미등록 — 점선
+            border = f"2px dashed {tokens.LINE_2}"
+            bg = tokens.SURFACE_2
+            name_color = tokens.INK_2
+            name_weight = 400
+
         self.setStyleSheet(f"""
             QFrame#uploadSlot {{
-                background-color: {tokens.SURFACE_2};
-                border: 2px dashed {tokens.LINE_2};
+                background-color: {bg};
+                border: {border};
                 border-radius: 16px;
             }}
             QFrame#uploadSlot:hover {{
                 border-color: {tokens.SKY_300};
             }}
-            QFrame#uploadSlot QLabel {{ background: transparent; }}
         """)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(10, 16, 10, 10)
-        root.setSpacing(6)
-        plus = QLabel("＋")
-        plus.setAlignment(Qt.AlignCenter)
-        plus.setStyleSheet(
-            f"font-size: 36px; color: {tokens.SKY_500};"
+        self._name.setStyleSheet(
+            f"font-family: {tokens.FONT_UI}; font-size: 13px;"
+            f"font-weight: {name_weight}; color: {name_color}; background: transparent;"
         )
-        plus.setFixedHeight(72)
-        root.addWidget(plus, alignment=Qt.AlignCenter)
-        tag = QLabel("GIF / Lottie")
-        tag.setAlignment(Qt.AlignCenter)
-        tag.setStyleSheet(
-            f"font-family: {tokens.FONT_MONO}; font-size: 9px; color: {tokens.INK_3};"
-            f"margin-top: 2px;"
-        )
-        root.addWidget(tag)
-        nm = QLabel("직접 업로드")
-        nm.setAlignment(Qt.AlignCenter)
-        nm.setStyleSheet(
-            f"font-family: {tokens.FONT_UI}; font-size: 13px; color: {tokens.INK_2};"
-        )
-        root.addWidget(nm)
+
+    def set_state(self, image_path: str, selected: bool):
+        self._image_path = image_path
+        self._selected = selected
+        self._refresh_appearance()
+
+    def _handle_clear_click(self):
+        self._on_clear()
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
-            QMessageBox.information(
-                self, "준비 중",
-                "사용자 이미지 업로드는 다음 버전에서 지원됩니다.\n"
-                "지금은 기본/신남/졸림 캐릭터 중 선택해 주세요."
-            )
+            # × 버튼 위 클릭은 clear가 따로 처리 (이벤트는 자식 버튼이 먼저 소비)
+            pos = event.position().toPoint()
+            if self.rect().contains(pos):
+                if self._image_path and Path(self._image_path).exists():
+                    # 이미 이미지가 있으면 선택 토글
+                    self._on_select_custom()
+                else:
+                    # 없으면 파일 선택 다이얼로그
+                    self._on_pick_file()
         super().mouseReleaseEvent(event)
 
 
@@ -1622,14 +1713,19 @@ class _CustomPanel(QWidget):
                                   on_click=self._on_character_click)
             self._char_cards.append(card)
             grid.addWidget(card, 0, col)
-        grid.addWidget(_UploadSlot(), 0, len(CHARACTERS))
+        self._upload_slot = _UploadSlot(
+            image_path=sw._cfg.character_image_path,
+            selected=(sw._cfg.character_id == "custom"),
+            on_pick_file=self._pick_file,
+            on_select_custom=self._select_custom,
+            on_clear=self._clear_custom_image,
+        )
+        grid.addWidget(self._upload_slot, 0, len(CHARACTERS))
         char_section.add_layout(grid)
 
-        # 파일 선택 버튼 (placeholder)
+        # "파일에서 선택..." 버튼 — 업로드 슬롯과 동일 동작
         file_btn = self._make_secondary("📁 파일에서 선택...")
-        file_btn.clicked.connect(lambda: QMessageBox.information(
-            self, "준비 중", "사용자 이미지 업로드는 다음 버전에서 지원됩니다."
-        ))
+        file_btn.clicked.connect(self._pick_file)
         file_btn_row = QHBoxLayout()
         file_btn_row.setContentsMargins(0, tokens.SP_LG, 0, 0)
         file_btn_row.addWidget(file_btn, alignment=Qt.AlignLeft)
@@ -1682,7 +1778,61 @@ class _CustomPanel(QWidget):
     def _on_character_click(self, char_id: str):
         for card in self._char_cards:
             card.set_selected(card._id == char_id)
+        self._upload_slot.set_state(self._sw._cfg.character_image_path, selected=False)
         self._sw._apply(character_id=char_id)
+
+    def _select_custom(self):
+        for card in self._char_cards:
+            card.set_selected(False)
+        self._upload_slot.set_state(self._sw._cfg.character_image_path, selected=True)
+        self._sw._apply(character_id="custom")
+
+    def _pick_file(self):
+        from PySide6.QtWidgets import QFileDialog
+        from src import character_image
+        path, _ = QFileDialog.getOpenFileName(
+            self, "캐릭터 이미지 선택", "",
+            "이미지 (*.png *.jpg *.jpeg *.gif *.bmp *.webp)"
+        )
+        if not path:
+            return
+        # 기존 이미지가 있었다면 정리
+        old_path = self._sw._cfg.character_image_path
+        saved_path = character_image.import_user_image(path)
+        if not saved_path:
+            QMessageBox.warning(self, "오류",
+                                "이미지를 불러올 수 없습니다. 다른 파일을 선택해 주세요.")
+            return
+        # QPixmap 로드 가능한지 최종 확인
+        pm = QPixmap(saved_path)
+        if pm.isNull():
+            character_image.clear_user_image(saved_path)
+            QMessageBox.warning(self, "오류",
+                                "지원하지 않는 이미지 형식입니다.")
+            return
+        # 새 경로 저장 + 자동으로 custom 선택
+        self._sw._apply(character_image_path=saved_path, character_id="custom")
+        # 기존 파일 삭제 (config가 성공적으로 저장된 후)
+        if old_path and old_path != saved_path:
+            character_image.clear_user_image(old_path)
+        # UI 갱신
+        for card in self._char_cards:
+            card.set_selected(False)
+        self._upload_slot.set_state(saved_path, selected=True)
+
+    def _clear_custom_image(self):
+        from src import character_image
+        old_path = self._sw._cfg.character_image_path
+        # 선택 중인 캐릭터가 custom이었다면 happy로 되돌림
+        changes = {"character_image_path": ""}
+        if self._sw._cfg.character_id == "custom":
+            changes["character_id"] = "happy"
+        self._sw._apply(**changes)
+        character_image.clear_user_image(old_path)
+        # UI 갱신
+        for card in self._char_cards:
+            card.set_selected(card._id == self._sw._cfg.character_id)
+        self._upload_slot.set_state("", selected=False)
 
     # ---------- 메시지 ----------
 
@@ -2050,10 +2200,8 @@ class _SoundPanel(QWidget):
         self._sw._apply(sound_name=sound_id)
 
     def _on_preview(self, sound_id: str):
-        QMessageBox.information(
-            self, "준비 중",
-            f"'{dict(SOUNDS).get(sound_id, sound_id)}' 미리듣기는 다음 버전에서 지원됩니다."
-        )
+        # 현재 볼륨으로 재생. 소리 켜기가 꺼져 있어도 미리듣기는 동작.
+        self._sw._on_preview_sound(sound_id, self._sw._cfg.volume)
 
 
 # ---------- 시작·트레이 탭 ----------
