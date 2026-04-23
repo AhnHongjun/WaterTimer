@@ -1784,12 +1784,13 @@ class _CustomPanel(QWidget):
     # ---------- 캐릭터 ----------
 
     def _rebuild_character_grid(self):
-        """그리드를 현재 config 기준으로 다시 구성 (업로드/삭제 직후 호출).
+        """그리드를 현재 config 기준으로 다시 구성.
 
-        레이아웃: 4열 기준. 첫 행은 빌트인 3종 + 첫 사용자 이미지 또는 '+ 업로드'.
-        이미지 수에 따라 다음 행으로 자동 줄바꿈.
+        - 빌트인 3종 + 업로드된 이미지들 + '+ 업로드' 카드.
+        - 업로드 이미지는 active_image_paths에 포함됐는지에 따라 개별 선택 상태.
+        - 활성 이미지가 하나 이상 있으면 character_id='custom' (팝업에서 랜덤 순환),
+          아무것도 활성이 아니면 빌트인 모드로 복귀.
         """
-        # 기존 위젯 제거
         while self._char_grid_layout.count():
             item = self._char_grid_layout.takeAt(0)
             w = item.widget()
@@ -1797,32 +1798,31 @@ class _CustomPanel(QWidget):
                 w.deleteLater()
 
         cfg = self._sw._cfg
-        selected_builtin = cfg.character_id
-        is_custom_mode = (cfg.character_id == "custom"
-                          and len(cfg.character_image_paths) > 0)
+        active_set = set(cfg.active_image_paths)
+        is_custom_mode = (cfg.character_id == "custom" and bool(active_set))
 
         self._char_cards: list[_CharacterCard] = []
-        self._user_cards: list[_UserImageCard] = []
+        self._user_cards: dict[str, _UserImageCard] = {}
 
         cards: list[QWidget] = []
-        # 1) 빌트인 3종
+        # 1) 빌트인 3종 — custom 모드가 아닐 때만 선택 표시
         for cid, name in CHARACTERS:
             c = _CharacterCard(cid, name,
-                               selected=(selected_builtin == cid and not is_custom_mode),
+                               selected=(cfg.character_id == cid and not is_custom_mode),
                                on_click=self._on_builtin_click)
             self._char_cards.append(c)
             cards.append(c)
-        # 2) 업로드된 사용자 이미지들
+        # 2) 업로드된 이미지들 — 각자 active 여부로 개별 선택 표시
         for p in cfg.character_image_paths:
             card = _UserImageCard(
                 image_path=p,
-                selected=is_custom_mode,
-                on_select=self._select_custom,
+                selected=(p in active_set),
+                on_select=lambda pp=p: self._toggle_user_image(pp),
                 on_remove=self._remove_user_image,
             )
-            self._user_cards.append(card)
+            self._user_cards[p] = card
             cards.append(card)
-        # 3) 마지막에 '+ 업로드'
+        # 3) + 업로드
         cards.append(_AddUploadCard(on_pick_file=self._pick_file))
 
         cols = 4
@@ -1831,13 +1831,30 @@ class _CustomPanel(QWidget):
             self._char_grid_layout.addWidget(card, r, c)
 
     def _on_builtin_click(self, char_id: str):
+        """빌트인 클릭 → 해당 빌트인 모드로 전환. active 선택은 유지(기억됨)."""
         self._sw._apply(character_id=char_id)
         self._rebuild_character_grid()
 
-    def _select_custom(self):
-        if not self._sw._cfg.character_image_paths:
-            return
-        self._sw._apply(character_id="custom")
+    def _toggle_user_image(self, path: str):
+        """업로드 이미지 카드 클릭 → active 여부 개별 토글.
+
+        - 활성이 하나 이상 있으면 character_id='custom'
+        - 모두 비활성이면 character_id='happy' (빌트인 기본)로 복귀
+        """
+        cfg = self._sw._cfg
+        active = list(cfg.active_image_paths)
+        if path in active:
+            active.remove(path)
+        else:
+            active.append(path)
+        changes = {"active_image_paths": active}
+        if active:
+            changes["character_id"] = "custom"
+        else:
+            # 활성 이미지가 없으면 빌트인 모드로 복귀
+            if cfg.character_id == "custom":
+                changes["character_id"] = "happy"
+        self._sw._apply(**changes)
         self._rebuild_character_grid()
 
     def _pick_file(self):
@@ -1860,16 +1877,26 @@ class _CustomPanel(QWidget):
             QMessageBox.warning(self, "오류",
                                 "지원하지 않는 이미지 형식입니다.")
             return
-        # 리스트에 추가 + character_id='custom'으로 전환
+        # 업로드된 새 이미지는 카탈로그에 추가되고, 바로 active 로도 등록(편의).
         new_paths = list(self._sw._cfg.character_image_paths) + [saved_path]
-        self._sw._apply(character_image_paths=new_paths, character_id="custom")
+        new_active = list(self._sw._cfg.active_image_paths) + [saved_path]
+        self._sw._apply(
+            character_image_paths=new_paths,
+            active_image_paths=new_active,
+            character_id="custom",
+        )
         self._rebuild_character_grid()
 
     def _remove_user_image(self, path: str):
         from src import character_image
         new_paths = [p for p in self._sw._cfg.character_image_paths if p != path]
-        changes = {"character_image_paths": new_paths}
-        if not new_paths and self._sw._cfg.character_id == "custom":
+        new_active = [p for p in self._sw._cfg.active_image_paths if p != path]
+        changes = {
+            "character_image_paths": new_paths,
+            "active_image_paths": new_active,
+        }
+        # 활성이 하나도 없으면 빌트인으로 되돌림
+        if not new_active and self._sw._cfg.character_id == "custom":
             changes["character_id"] = "happy"
         self._sw._apply(**changes)
         character_image.clear_user_image(path)

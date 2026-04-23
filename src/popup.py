@@ -242,14 +242,12 @@ class Popup(QWidget):
             #popupContainer {{
                 background-color: {tokens.SURFACE};
                 border-radius: 22px;
+                border: 1px solid {tokens.LINE};
             }}
         """)
-        shadow = QGraphicsDropShadowEffect(container)
-        shadow.setBlurRadius(tokens.SHADOW_LG[0])
-        shadow.setOffset(tokens.SHADOW_LG[1], tokens.SHADOW_LG[2])
-        r, g, b, a = tokens.SHADOW_LG[3]
-        shadow.setColor(QColor(r, g, b, a))
-        container.setGraphicsEffect(shadow)
+        # 그림자: QGraphicsDropShadowEffect 는 Qt.Tool + WA_TranslucentBackground
+        # 조합에서 자식 위젯 클릭 이벤트를 막는 것으로 알려진 버그가 있어 사용하지 않음.
+        # 옅은 1px 테두리로 경계만 살림.
         outer.addWidget(container)
 
         root = QHBoxLayout(container)
@@ -442,14 +440,19 @@ class Popup(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # × 버튼을 컨테이너 우상단으로 이동 (showEvent에서 geometry가 확정됨)
+        # × 버튼을 컨테이너 우상단으로 이동 (showEvent에서 geometry가 확정됨).
+        # close_btn은 container의 자식이므로 container 좌표계 기준으로 move.
         container = self.findChild(QFrame, "popupContainer")
         if container:
             self._close_btn.move(
-                container.x() + container.width() - self._close_btn.width() - 12,
-                container.y() + 10,
+                container.width() - self._close_btn.width() - 12,
+                10,
             )
             self._close_btn.raise_()
+        # Qt.Tool + FramelessWindowHint 창이 Windows에서 첫 클릭을 "activation"으로
+        # 소비해버리는 것을 막기 위해 명시적으로 활성화·포커스.
+        self.raise_()
+        self.activateWindow()
         self._slide_in()
 
     def _slide_in(self):

@@ -66,7 +66,8 @@ class Config:
     goal: int = 8                               # 하루 목표 잔 수
     days: List[int] = field(default_factory=lambda: list(ALL_DAYS))  # 알림 요일 (0=월)
     character_id: str = "happy"                 # 팝업 캐릭터: happy/excited/sleepy/custom
-    character_image_paths: List[str] = field(default_factory=list)   # character_id=='custom'일 때 풀 (랜덤 순환)
+    character_image_paths: List[str] = field(default_factory=list)   # 사용자가 업로드한 이미지 전체 카탈로그
+    active_image_paths: List[str] = field(default_factory=list)      # 'custom' 모드에서 랜덤 순환에 참여할 subset
     messages: List[str] = field(default_factory=list)                # 알림 메시지 (평면 목록)
     snooze_minutes: int = 5                     # "5분 뒤" 스누즈 분
     sound_enabled: bool = False
@@ -96,6 +97,7 @@ def _default() -> Config:
         days=list(ALL_DAYS),
         character_id="happy",
         character_image_paths=[],
+        active_image_paths=[],
         messages=list(DEFAULT_MESSAGES),
         snooze_minutes=5,
         sound_enabled=False,
@@ -204,6 +206,13 @@ def _from_dict(d: dict) -> Config:
     if image_paths is None:
         legacy = str(d.get("character_image_path", ""))
         image_paths = [legacy] if legacy else []
+    image_paths = [str(p) for p in image_paths if p]
+    # v3.1 → v3.2 마이그레이션: active_image_paths 누락이면 전체를 활성으로 취급.
+    active_paths = d.get("active_image_paths")
+    if active_paths is None:
+        active_paths = list(image_paths)
+    # active 는 카탈로그 내에 있는 것만 유지
+    active_paths = [p for p in active_paths if p in image_paths]
     return Config(
         interval_minutes=int(d["interval_minutes"]),
         active_start=str(d["active_start"]),
@@ -215,7 +224,8 @@ def _from_dict(d: dict) -> Config:
         goal=int(d.get("goal", defaults.goal)),
         days=list(d.get("days", defaults.days)),
         character_id=str(d.get("character_id", defaults.character_id)),
-        character_image_paths=[str(p) for p in image_paths if p],
+        character_image_paths=image_paths,
+        active_image_paths=active_paths,
         messages=list(messages),
         snooze_minutes=int(d.get("snooze_minutes", defaults.snooze_minutes)),
         sound_enabled=bool(d.get("sound_enabled", defaults.sound_enabled)),

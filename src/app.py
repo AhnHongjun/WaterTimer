@@ -132,8 +132,8 @@ class Application:
         self.show_popup(datetime.now(), force=True)
 
     def _pick_image(self) -> str:
-        """character_id=='custom'일 때 풀에서 랜덤 하나. 직전 것과 중복 회피."""
-        paths = [p for p in self.cfg.character_image_paths if p]
+        """character_id=='custom'일 때 활성 풀에서 랜덤 하나. 직전 것과 중복 회피."""
+        paths = [p for p in self.cfg.active_image_paths if p]
         if not paths:
             return ""
         if len(paths) == 1:
