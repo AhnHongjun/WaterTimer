@@ -43,6 +43,7 @@ class Application:
         self._last_message_index: Optional[int] = None
         self._last_pick: Optional[tuple[str, str]] = None   # (kind, value) — 직전 팝업 캐릭터
         self.active_popup: Optional[Popup] = None
+        self._settings_dialog = None   # 비모달 설정창 참조 (GC 방지)
         self.sound_player = SoundPlayer()
 
         self.tray = Tray(
@@ -198,6 +199,11 @@ class Application:
         self.tray.set_paused(self.paused)
 
     def open_settings(self):
+        # 이미 열려 있으면 앞으로 가져오기만 (중복 생성 방지)
+        if self._settings_dialog is not None and self._settings_dialog.isVisible():
+            self._settings_dialog.raise_()
+            self._settings_dialog.activateWindow()
+            return
         from src.settings_window import SettingsWindow
         dlg = SettingsWindow(
             cfg=self.cfg,
@@ -208,7 +214,12 @@ class Application:
             on_add_cup=self._add_cup,
             on_preview_sound=self.sound_player.play,
         )
-        dlg.exec()
+        dlg.finished.connect(self._on_settings_closed)
+        self._settings_dialog = dlg
+        dlg.show()   # 비모달 — exec() 쓰지 않음. 팝업이 동시에 뜰 때 둘 다 클릭 가능해야 함.
+
+    def _on_settings_closed(self, _result: int):
+        self._settings_dialog = None
 
     def _reset_count(self):
         from dataclasses import replace

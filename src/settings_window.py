@@ -252,6 +252,9 @@ class SettingsWindow(QDialog):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(tokens.SETTINGS_W + 20, tokens.SETTINGS_H + 20)   # +20: 그림자 여유
+        # 비모달: 설정창이 열려 있어도 팝업이 뜨면 팝업도 클릭 가능해야 함.
+        self.setModal(False)
+        self.setWindowModality(Qt.NonModal)
 
         self._build_ui()
         self._activate_tab(DEFAULT_TAB)
