@@ -12,6 +12,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (str(ROOT / "src" / "assets" / "bundled"), "assets/bundled"),
+        (str(ROOT / "src" / "assets" / "sounds"), "assets/sounds"),
         (str(ROOT / "src" / "assets" / "icon.ico"), "assets"),
         (str(ROOT / "src" / "assets" / "icon.png"), "assets"),
     ],
