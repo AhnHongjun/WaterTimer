@@ -214,7 +214,7 @@ class Popup(QWidget):
         self._particles: List[_DropParticle] = []
         self._anim_refs: List[QPropertyAnimation] = []
 
-        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(tokens.POPUP_W, tokens.POPUP_H + 20)  # +20: shadow 여유
 
