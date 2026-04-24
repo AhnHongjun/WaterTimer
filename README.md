@@ -8,7 +8,7 @@
 
 ## 📥 설치하기
 
-1. [**Releases 페이지**](../../releases/latest) 에서 `WaterTimer-Setup-0.1.0.exe` 를 다운로드하세요.
+1. [**Releases 페이지**](../../releases/latest) 에서 `WaterTimer-Setup-0.1.1.exe` 를 다운로드하세요.
 2. 다운로드한 파일을 더블클릭.
 3. Windows 가 `PC를 보호했습니다` 파란 창을 띄우면 **"추가 정보" → "실행"** 눌러주세요. 처음 한 번만 뜨는 보안 경고예요.
 4. 설치 마법사에서 **다음 → 설치 → 마침**. 끝.
